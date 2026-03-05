@@ -1,5 +1,6 @@
 import json
 import logging
+import httpx
 from openai import OpenAI
 from config import config
 
@@ -14,13 +15,19 @@ class GrokXAIAPI:
     """
 
     def __init__(self):
-        # Grok 官方全面兼容 OpenAI SDK，只需替换 api_key 和 base_url
+        # 修复代理冲突问题：显式创建一个 httpx 客户端
+        http_client = httpx.Client(
+            follow_redirects=True,
+        )
+
         self.client = OpenAI(
             api_key=config.GROK_API_KEY,
-            base_url=config.GROK_BASE_URL
+            base_url=config.GROK_BASE_URL,
+            http_client=http_client
         )
-        # 指定使用的模型，建议使用最新的 grok 模型以获取最好的联网搜索能力
-        self.model = "grok-beta"
+        # 升级到最新的旗舰推理模型 Grok-4
+        # 该模型具备更强的逻辑推理和实时流量分析能力
+        self.model = "grok-4"
 
     def analyze_token_traffic(self, token_data: dict) -> dict:
         """
@@ -30,7 +37,7 @@ class GrokXAIAPI:
         ca = token_data.get("contractAddress", "Unknown")
         progress = token_data.get("progress", "Unknown")
 
-        # 精心设计的 Prompt，引导 Grok 查数据并输出固定格式
+        # Grok-4 特有的推理引导提示词
         prompt = f"""
         你是一个顶级的 Web3 Meme 币投研专家。我刚在链上发现了一个早期的优质代币。
 
@@ -47,7 +54,7 @@ class GrokXAIAPI:
         4. 是否有用户在提示 rug、scam 等负面预警？
 
         【输出格式要求】
-        请严格以 JSON 格式输出你的分析结果，不要包含任何 markdown 标记（如 ```json），直接输出 JSON 字符串。
+        请严格以 JSON 格式输出你的分析结果。不要包含任何 markdown 标记。
         必须包含以下两个字段：
         {{
             "rating": "S 或 A 或 B 或 F",
@@ -55,44 +62,39 @@ class GrokXAIAPI:
         }}
 
         【评级标准】
-        S: 流量爆炸，有知名 KOL 喊单，情绪真实 FOMO，无软跑路迹象。
-        A: 有一定的真实用户讨论度，处于早期酝酿阶段。
-        B: 讨论寥寥无几，几乎无人关注。
-        F: 纯机器号刷屏，或者出现大量 rug/scam 的负面预警。
+        S: 流量爆炸，情绪真实 FOMO，KOL 密集喊单。
+        A: 有一定的真实用户讨论度，处于早期酝酿。
+        B: 讨论寥寥无几，不建议参与。
+        F: 纯机器号、项目方刷屏或存在致命负面预警。
         """
 
         try:
-            logging.info(f"正在请求 Grok 分析代币 ${symbol} 的推特流量...")
+            logging.info(f"正在请求 Grok-4 分析代币 ${symbol} 的推特流量...")
+            # Grok-4 是原生推理模型，会自动进行思维链分析
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
                     {"role": "system",
-                     "content": "你是一个严谨的 Web3 数据分析师，你必须强制使用纯 JSON 格式输出结果，拒绝任何其他废话。"},
+                     "content": "你是一个严谨的 Web3 数据分析师，必须使用纯 JSON 格式输出结果，严禁返回非 JSON 文本。"},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.3,  # 保持较低温度，让输出更客观、格式更稳定
+                temperature=0.3,
             )
 
             result_text = response.choices[0].message.content.strip()
 
-            # 清理大模型可能不听话带上的 Markdown 标记
-            if result_text.startswith("```"):
-                result_text = result_text.split("\n", 1)[-1]
-            if result_text.endswith("```"):
-                result_text = result_text.rsplit("\n", 1)[0]
-            result_text = result_text.replace("```json", "").replace("```", "").strip()
+            # 清理可能的 Markdown 标记（Grok-4 有时会带上以确格式化）
+            if "```" in result_text:
+                result_text = result_text.replace("```json", "").replace("```", "").strip()
 
             analysis_result = json.loads(result_text)
-            logging.info(f"代币 ${symbol} 的 Grok 评级为: {analysis_result.get('rating')}")
+            logging.info(f"代币 ${symbol} 的 Grok-4 评级为: {analysis_result.get('rating')}")
 
             return analysis_result
 
-        except json.JSONDecodeError:
-            logging.error(f"Grok 返回了非预期的 JSON 格式: {result_text}")
-            return {"rating": "Error", "summary": "解析 Grok 返回数据失败，返回格式不规范。"}
         except Exception as e:
             logging.error(f"Grok API 请求异常: {e}")
-            return {"rating": "Error", "summary": f"请求 Grok 异常: {str(e)}"}
+            return {"rating": "Error", "summary": f"请求 Grok-4 异常: {str(e)}"}
 
 
 # 实例化提供给其他模块使用
