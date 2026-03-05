@@ -1,0 +1,15 @@
+#用于处理 HTTP 请求 (Binance API)
+
+requests==2.31.0
+
+#用于读取 .env 文件
+
+python-dotenv==1.0.1
+
+#Grok (xAI) 官方推荐使用 OpenAI SDK 接入
+
+openai==1.14.0
+
+#任务定时调度器
+
+schedule==1.2.1
