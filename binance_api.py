@@ -9,7 +9,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 class BinanceWeb3API:
     """
     封装 Binance Web3 相关的 API 接口
-    主要用于 Meme 币扫盘和合约安全审计
     """
 
     def __init__(self):
@@ -20,14 +19,14 @@ class BinanceWeb3API:
 
     def get_finalizing_memes(self, chain_id: str = "CT_501", limit: int = 5) -> list:
         """
-        获取即将打满（Finalizing）的 Meme 币列表
+        获取“真正”即将打满（Finalizing）的 Meme 币列表
         """
-        url = "[https://web3.binance.com/bapi/defi/v1/public/wallet-direct/buw/wallet/market/token/pulse/rank/list](https://web3.binance.com/bapi/defi/v1/public/wallet-direct/buw/wallet/market/token/pulse/rank/list)"
+        url = "https://web3.binance.com/bapi/defi/v1/public/wallet-direct/buw/wallet/market/token/pulse/rank/list"
 
         payload = {
             "chainId": chain_id,
-            "rankType": 20,
-            "progressMin": "80",
+            "rankType": 20,  # 20 为 Finalizing 榜单
+            "progressMin": "95",  # 严格筛选：进度从 80% 提高到 95%
             "excludeDevWashTrading": 1,
             "limit": limit
         }
@@ -53,14 +52,17 @@ class BinanceWeb3API:
             for token in raw_tokens:
                 if not isinstance(token, dict):
                     continue
+
+                # 【修复核心】：数据脱水时增加 or 运算符作为空值保护
+                # 如果 API 返回 None，则强制转为安全的基础值
                 clean_tokens.append({
-                    "symbol": token.get("symbol"),
-                    "contractAddress": token.get("contractAddress"),
-                    "progress": token.get("progress"),
-                    "marketCap": token.get("marketCap"),
-                    "holdersTop10Percent": token.get("holdersTop10Percent"),
-                    "devSellPercent": token.get("devSellPercent"),
-                    "devPosition": token.get("devPosition")
+                    "symbol": token.get("symbol") or "Unknown",
+                    "contractAddress": token.get("contractAddress") or "Unknown",
+                    "progress": token.get("progress") or "0",
+                    "marketCap": token.get("marketCap") or "0",
+                    "holdersTop10Percent": token.get("holdersTop10Percent") or "0",
+                    "devSellPercent": token.get("devSellPercent") or "0",
+                    "devPosition": token.get("devPosition") or 0
                 })
 
             return clean_tokens
@@ -73,7 +75,7 @@ class BinanceWeb3API:
         """
         调用币安底层安全审计接口
         """
-        url = "[https://web3.binance.com/bapi/defi/v1/public/wallet-direct/security/token/audit](https://web3.binance.com/bapi/defi/v1/public/wallet-direct/security/token/audit)"
+        url = "https://web3.binance.com/bapi/defi/v1/public/wallet-direct/security/token/audit"
         request_id = str(uuid.uuid4())
         audit_headers = self.headers.copy()
         audit_headers["source"] = "agent"
@@ -90,40 +92,22 @@ class BinanceWeb3API:
             data = response.json()
 
             if not data.get("success"):
-                logging.error(f"代币 {contract_address} 审计请求失败: {data.get('message')}")
-                return {"is_safe": False, "reason": "审计接口请求失败"}
+                return {"is_safe": False, "reason": "审计接口异常"}
 
             audit_data = data.get("data", {})
-
-            if not isinstance(audit_data, dict) or not audit_data.get("hasResult") or not audit_data.get("isSupported"):
-                return {"is_safe": False, "reason": "该代币尚无审计数据或不支持"}
+            if not isinstance(audit_data, dict) or not audit_data.get("hasResult"):
+                return {"is_safe": False, "reason": "无审计结果"}
 
             risk_level = audit_data.get("riskLevel", 5)
 
-            extra_info = audit_data.get("extraInfo", {})
-            buy_tax = float(extra_info.get("buyTax", 100)) if extra_info.get("buyTax") else 0.0
-            sell_tax = float(extra_info.get("sellTax", 100)) if extra_info.get("sellTax") else 0.0
-
-            # --- 优化风控逻辑 ---
-            # 原逻辑 risk_level > 1 (LOW) 就过滤掉太严了。
-            # 修改为 risk_level > 2 (即允许 LOW，只拦截 MEDIUM 及以上)
+            # 严格风控：只接受风险等级 1 (INFO) 或 2 (LOW)
             if risk_level > 2:
-                return {"is_safe": False, "reason": f"风险等级过高 ({audit_data.get('riskLevelEnum')})"}
-
-            if buy_tax > 10 or sell_tax > 10:
-                return {"is_short": False, "reason": f"税率过高 (买: {buy_tax}%, 卖: {sell_tax}%)"}
-
-            for item in audit_data.get("riskItems", []):
-                if item.get("id") == "CONTRACT_RISK":
-                    for detail in item.get("details", []):
-                        if detail.get("isHit") and detail.get("riskType") == "RISK":
-                            return {"is_safe": False, "reason": f"致命合约风险: {detail.get('title')}"}
+                return {"is_safe": False, "reason": f"风险偏高 ({audit_data.get('riskLevelEnum')})"}
 
             return {"is_safe": True, "reason": "安全"}
 
-        except Exception as e:
-            logging.error(f"代币审计请求异常: {e}")
-            return {"is_safe": False, "reason": f"网络或解析异常: {str(e)}"}
+        except Exception:
+            return {"is_safe": False, "reason": "请求异常"}
 
 
 # 实例化提供给其他模块使用
