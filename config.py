@@ -17,6 +17,9 @@ class Config:
     TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN")
     TG_CHAT_ID = os.getenv("TG_CHAT_ID")
 
+    # ---------------- 飞书 配置 ----------------
+    FEISHU_WEBHOOK_URL = os.getenv("FEISHU_WEBHOOK_URL")
+
     # ---------------- 引擎运行配置 ----------------
     # 获取不到则默认 30 秒
     SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL_SECONDS", 30))
@@ -28,12 +31,17 @@ class Config:
         启动前校验核心配置是否已填写
         """
         missing_configs = []
+
+        # 校验 Grok API Key
         if not cls.GROK_API_KEY or cls.GROK_API_KEY.startswith("xai-your"):
             missing_configs.append("GROK_API_KEY")
-        if not cls.TG_BOT_TOKEN or cls.TG_BOT_TOKEN.startswith("123456789"):
-            missing_configs.append("TG_BOT_TOKEN")
-        if not cls.TG_CHAT_ID or cls.TG_CHAT_ID == "your_chat_id_here":
-            missing_configs.append("TG_CHAT_ID")
+
+        # 校验通知通道：允许 Telegram 或 飞书 至少配置一个
+        tg_ready = cls.TG_BOT_TOKEN and not cls.TG_BOT_TOKEN.startswith("123456789")
+        feishu_ready = cls.FEISHU_WEBHOOK_URL and "feishu" in cls.FEISHU_WEBHOOK_URL
+
+        if not tg_ready and not feishu_ready:
+            missing_configs.append("TG_BOT_TOKEN 或 FEISHU_WEBHOOK_URL (至少需要配置一个通知通道)")
 
         if missing_configs:
             raise ValueError(f"🚨 缺少必要的环境变量配置: {', '.join(missing_configs)}。请检查 .env 文件！")
