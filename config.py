@@ -21,9 +21,13 @@ class Config:
     FEISHU_WEBHOOK_URL = os.getenv("FEISHU_WEBHOOK_URL")
 
     # ---------------- 引擎运行配置 ----------------
-    # 获取不到则默认 30 秒
     SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL_SECONDS", 30))
     TARGET_CHAIN_ID = os.getenv("TARGET_CHAIN_ID", "CT_501")
+
+    # ---------------- 自动交易配置 (新增) ----------------
+    SOL_PRIVATE_KEY = os.getenv("SOL_PRIVATE_KEY")
+    BUY_AMOUNT_SOL = float(os.getenv("BUY_AMOUNT_SOL", 0.05))  # 默认买 0.05 SOL
+    SOL_RPC_URL = os.getenv("SOL_RPC_URL", "https://api.mainnet-beta.solana.com")
 
     @classmethod
     def validate(cls):
@@ -42,6 +46,10 @@ class Config:
 
         if not tg_ready and not feishu_ready:
             missing_configs.append("TG_BOT_TOKEN 或 FEISHU_WEBHOOK_URL (至少需要配置一个通知通道)")
+
+        # 交易私钥校验提示 (非强制拦截，为空时将以只读模拟模式运行)
+        if not cls.SOL_PRIVATE_KEY:
+            print("⚠️ 未配置 SOL_PRIVATE_KEY，自动买卖功能将被禁用，仅监控。")
 
         if missing_configs:
             raise ValueError(f"🚨 缺少必要的环境变量配置: {', '.join(missing_configs)}。请检查 .env 文件！")

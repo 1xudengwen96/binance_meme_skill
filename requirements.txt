@@ -21,3 +21,9 @@ pydantic>=2.4.0
 #异步支持
 
 asyncio>=3.4.3
+
+#Solana 链上交易与签名核心库 (新增)
+
+solana>=0.33.0
+solders>=0.21.0
+base58>=2.1.1
