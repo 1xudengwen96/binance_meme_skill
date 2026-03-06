@@ -37,7 +37,7 @@ def retry_request(max_retries=3, backoff_factor=1.5):
 class BinanceAPI:
     """
     基于官方 binance-skills-hub 仓库标准的 Web3 API 客户端
-    自带动态路由降级 (Fallback) 机制，彻底杜绝 404 崩溃
+    采用 wallet-direct 精准路由，彻底杜绝 404 崩溃
     """
 
     def __init__(self):
@@ -46,84 +46,96 @@ class BinanceAPI:
         self.session.headers.update({
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "application/json",
-            "Clienttype": "web",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "Accept-Encoding": "identity"  # 官方文档要求的 Header
         })
 
-    def _smart_post(self, skill_name: str, payload: dict) -> dict:
-        """
-        智能路由发送器：根据官方 binance-skills-hub 规范请求，并附带容错降级
-        """
-        # 路由优先级：1. 官方 Skill 端点 -> 2. 传统 Explorer 端点 -> 3. Token 子端点
-        urls_to_try = [
-            f"https://www.binance.com/bapi/web3/v1/public/web3-skill/{skill_name}",
-            f"https://www.binance.com/bapi/web3/v1/public/web3/explorer/{skill_name}",
-            f"https://www.binance.com/bapi/web3/v1/public/web3/explorer/token/{skill_name}"
-        ]
-
-        for url in urls_to_try:
-            try:
-                resp = self.session.post(url, json=payload, timeout=8)
-                # 如果遇到 404，静默跳过，尝试下一个备用路由
-                if resp.status_code == 404:
-                    continue
-
-                resp.raise_for_status()
-                data = resp.json()
-
-                if data.get("code") == "000000":
-                    return data
-            except requests.exceptions.RequestException as e:
-                # 记录调试日志，继续尝试备用地址
-                logging.debug(f"尝试端点 {url} 失败: {e}")
-                continue
-
-        # 所有路由都失败则抛出异常，交给外层的 @retry_request 处理
-        raise requests.exceptions.RequestException(f"无法访问 {skill_name} 的任何已知端点 (均返回 404 或超时)")
+    def _safe_post(self, url: str, payload: dict):
+        """基础的容错 POST 发送器，返回剥离 code 后的真实 data"""
+        resp = self.session.post(url, json=payload, timeout=8)
+        resp.raise_for_status()
+        data = resp.json()
+        if isinstance(data, dict) and str(data.get("code")) in ["000000", "0"]:
+            return data.get("data")
+        return None
 
     @retry_request(max_retries=3)
     def get_memes(self, chain_id="CT_501", rank_type=10):
         """
         Skill: meme-rush (获取土狗打满榜单)
+        官方路由: /pulse/rank/list
         rank_type: 10(New), 20(Finalizing), 30(Migrated)
         """
-        payload = {"chainId": chain_id, "rankType": rank_type}
-        data = self._smart_post("meme-rush", payload)
-        if data and data.get("data"):
-            return data["data"]
-        return []
+        url = "https://web3.binance.com/bapi/defi/v1/public/wallet-direct/buw/wallet/market/token/pulse/rank/list"
+        payload = {"chainId": chain_id, "rankType": rank_type, "limit": 30}
+
+        data = self._safe_post(url, payload)
+
+        # 兼容 Binance 不同的返回结构 (List 或 Dict 嵌套)
+        tokens = []
+        if isinstance(data, list):
+            tokens = data
+        elif isinstance(data, dict):
+            tokens = data.get("tokens") or data.get("list") or data.get("data") or []
+
+        logging.info(f"📡 [API] 从接口拉取到 {len(tokens)} 个代币原始数据 (榜单: {rank_type})")
+        return tokens
 
     @retry_request(max_retries=3)
-    def get_token_info(self, chain_id, contract_address):
+    def get_trending_topics(self, chain_id="CT_501"):
         """
-        Skill: query-token-info (获取代币物理指标)
+        Skill: crypto-market-rank / topic-rush (获取大盘热门叙事)
+        官方路由: /social-rush/rank/list
         """
-        payload = {"chainId": chain_id, "contractAddress": contract_address}
-        data = self._smart_post("query-token-info", payload)
-        if data and data.get("data"):
-            return data["data"]
-        return {}
+        url = "https://web3.binance.com/bapi/defi/v1/public/wallet-direct/buw/wallet/market/token/social-rush/rank/list"
+        payload = {"chainId": chain_id, "rankType": 10, "limit": 20, "sort": 10}
+
+        try:
+            data = self._safe_post(url, payload)
+            topics = []
+
+            items = []
+            if isinstance(data, list):
+                items = data
+            elif isinstance(data, dict):
+                items = data.get("tokens") or data.get("topics") or data.get("list") or []
+
+            for item in items:
+                if isinstance(item, dict) and "topic" in item:
+                    topics.append(item["topic"])
+
+            logging.info(f"📡 [API] 成功拉取到 {len(topics)} 个大盘热门叙事")
+            return topics
+        except Exception as e:
+            logging.debug(f"获取热门叙事失败，跳过: {e}")
+            return []
 
     @retry_request(max_retries=3)
     def get_token_audit(self, chain_id, contract_address):
         """
         Skill: query-token-audit (深度安全审计)
         """
+        urls_to_try = [
+            "https://web3.binance.com/bapi/defi/v1/public/wallet-direct/buw/wallet/market/token/security",
+            "https://www.binance.com/bapi/web3/v1/public/web3-skill/query-token-audit",
+            "https://www.binance.com/bapi/web3/v1/public/web3/explorer/token/audit"
+        ]
         payload = {"chainId": chain_id, "contractAddress": contract_address}
-
-        # 默认的高风险防御状态
         result = {"is_safe": False, "risk_level": 5, "detail": {}}
 
-        try:
-            data = self._smart_post("query-token-audit", payload)
-            if data and data.get("data"):
-                audit_data = data["data"]
-                result["is_safe"] = audit_data.get("isSafe", False)
-                result["risk_level"] = audit_data.get("riskLevel", 5)
-                result["detail"] = audit_data
-        except Exception as e:
-            logging.warning(f"⚠️ 审计接口获取异常，默认返回高风险 ({contract_address}): {e}")
+        for url in urls_to_try:
+            try:
+                data = self._safe_post(url, payload)
+                if isinstance(data, dict):
+                    result["is_safe"] = data.get("isSafe", False)
+                    result["risk_level"] = data.get("riskLevel", 5)
+                    result["detail"] = data
+                    return result  # 成功获取则立即返回
+            except Exception:
+                continue
 
+        # 降级静默日志，防止刷屏
+        logging.debug(f"审计接口获取异常，默认返回高风险 ({contract_address[:6]}...)")
         return result
 
     @retry_request(max_retries=2)
@@ -131,33 +143,41 @@ class BinanceAPI:
         """
         Skill: trading-signal (聪明钱雷达追踪)
         """
+        urls_to_try = [
+            "https://web3.binance.com/bapi/defi/v1/public/wallet-direct/buw/wallet/market/token/smart-money",
+            "https://www.binance.com/bapi/web3/v1/public/web3-skill/trading-signal"
+        ]
         payload = {"chainId": chain_id, "contractAddress": contract_address}
-        try:
-            data = self._smart_post("trading-signal", payload)
-            if data and data.get("data"):
-                return data["data"]
-        except Exception:
-            pass
-        # 若获取失败，返回默认空数据，避免阻断主引擎的算分流
+
+        for url in urls_to_try:
+            try:
+                data = self._safe_post(url, payload)
+                if isinstance(data, dict):
+                    return data
+            except Exception:
+                continue
+
         return {"smartMoneyCount": 0, "smartMoneyInflow": 0.0}
 
-    @retry_request(max_retries=2)
-    def get_trending_topics(self, chain_id="CT_501"):
+    @retry_request(max_retries=3)
+    def get_token_info(self, chain_id, contract_address):
         """
-        Skill: crypto-market-rank (获取大盘热门叙事)
+        Skill: query-token-info (获取代币物理指标详情)
         """
-        payload = {"chainId": chain_id}
-        try:
-            data = self._smart_post("crypto-market-rank", payload)
-            if data and data.get("data"):
-                # 兼容不同的返回结构
-                if isinstance(data["data"], list):
-                    return [item.get("topic") for item in data["data"] if "topic" in item]
-                elif isinstance(data["data"], dict) and "topics" in data["data"]:
-                    return [item.get("topic") for item in data["data"]["topics"] if "topic" in item]
-        except Exception:
-            pass
-        return []
+        urls_to_try = [
+            "https://web3.binance.com/bapi/defi/v1/public/wallet-direct/buw/wallet/market/token/info",
+            "https://www.binance.com/bapi/web3/v1/public/web3-skill/query-token-info"
+        ]
+        payload = {"chainId": chain_id, "contractAddress": contract_address}
+
+        for url in urls_to_try:
+            try:
+                data = self._safe_post(url, payload)
+                if isinstance(data, dict):
+                    return data
+            except Exception:
+                continue
+        return {}
 
 
 # 实例化单例
