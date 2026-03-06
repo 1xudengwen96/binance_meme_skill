@@ -1,78 +1,97 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from pydantic import BaseModel
-from typing import List, Optional
-import uvicorn
+import logging
 import os
+from flask import Flask, request, jsonify, send_from_directory
 
-# 初始化 FastAPI 应用
-app = FastAPI(title="Meme Hunter Pro API Gateway")
+# 初始化 Flask 应用，静态文件目录设为当前目录（为了直接读取 index.html）
+app = Flask(__name__, static_folder='.')
 
-# 配置 CORS 跨域，确保前端 index.html 可以顺利访问接口
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# 全局变量，用于保存狙击引擎的实例
+_engine_instance = None
 
-# 内存数据存储中心 (DataStore)
-# 负责在 Python 引擎和 React 前端之间共享数据
-class DataStore:
-    def __init__(self):
-        # 存储最近扫描到的高评分代币列表
-        self.tokens = []
-        # 全局统计指标
-        self.stats = {
-            "scanned": 0,  # 总扫描数
-            "hits": 0,     # 发现金狗数
-            "rugs": 0      # 拦截风险数
-        }
 
-# 实例化全局存储
-store = DataStore()
-
-# --- 路由定义 ---
-
-@app.get("/")
-async def serve_dashboard():
+def init_api_server(engine):
     """
-    根路由：直接托管并返回前端大盘 HTML 文件
+    初始化 API 服务器并绑定 SniperEngine 实例
+    由 main.py 在启动时调用
     """
-    if os.path.exists("index.html"):
-        return FileResponse("index.html")
-    return {"error": "index.html 尚未生成，请检查根目录"}
+    global _engine_instance
+    _engine_instance = engine
+    logging.info("🔌 API 控制接口已成功绑定狙击引擎实例。")
 
-@app.get("/api/tokens")
-async def get_tokens():
-    """
-    前端大盘轮询接口：返回最新的代币列表和统计数据
-    """
-    # 返回最近 15 个命中的信号，确保前端不卡顿
-    return {
-        "tokens": store.tokens[-15:],
-        "stats": store.stats,
-        "status": "online"
-    }
 
-@app.post("/api/inject_token")
-async def inject_token(token: dict):
-    """
-    内部接口：供 sniper_engine 发现目标后实时注入数据
-    """
-    # 简单的去重逻辑
-    ca_list = [t.get("contractAddress") for t in store.tokens]
-    if token.get("contractAddress") not in ca_list:
-        store.tokens.append(token)
-        store.stats["hits"] += 1
-    return {"status": "success"}
+# ==========================================
+# 页面路由
+# ==========================================
+@app.route('/')
+def index():
+    """提供前端作战大盘 HTML 页面"""
+    if os.path.exists('index.html'):
+        return send_from_directory('.', 'index.html')
+    return "⚠️ 找不到 index.html，请确保作战大盘页面文件在当前目录下。", 404
 
-def start_server(port: int = 8000):
-    """
-    启动 Uvicorn 服务器
-    """
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
 
-if __name__ == "__main__":
-    start_server()
+# ==========================================
+# API 接口路由
+# ==========================================
+@app.route('/api/toggle_engine', methods=['POST'])
+def toggle_engine():
+    """
+    一键启停控制接口
+    接收 JSON: {"action": "start"} 或 {"action": "stop"}
+    """
+    global _engine_instance
+    if not _engine_instance:
+        return jsonify({"status": "error", "message": "引擎未初始化绑定"}), 500
+
+    try:
+        data = request.get_json()
+        action = data.get('action')
+
+        if action == 'start':
+            _engine_instance.set_active_state(True)
+            return jsonify({"status": "success", "message": "猎犬已出笼，恢复打狗！", "is_active": True})
+        elif action == 'stop':
+            _engine_instance.set_active_state(False)
+            return jsonify({"status": "success", "message": "引擎已暂停，进入休息状态。", "is_active": False})
+        else:
+            return jsonify({"status": "error", "message": f"未知指令: {action}"}), 400
+
+    except Exception as e:
+        logging.error(f"❌ 切换引擎状态时发生错误: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/status', methods=['GET'])
+def get_status():
+    """
+    获取当前系统状态（供前端页面刷新时同步显示）
+    """
+    global _engine_instance
+    is_active = getattr(_engine_instance, 'is_active', False) if _engine_instance else False
+
+    return jsonify({
+        "status": "success",
+        "is_active": is_active
+    })
+
+
+# ==========================================
+# 服务器启动逻辑
+# ==========================================
+def run_server(host='0.0.0.0', port=8000):
+    """
+    启动 Flask Web 服务器
+    """
+    # 禁用 Flask 默认的开发服务器滚动日志，保持终端清爽（只看打狗日志）
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.ERROR)
+
+    print(f"\n🌐 Web 作战大盘已启动: http://127.0.0.1:{port}\n")
+
+    # 启动应用
+    app.run(host=host, port=port, debug=False, use_reloader=False)
+
+
+if __name__ == '__main__':
+    # 仅供独立测试 API 使用
+    run_server()

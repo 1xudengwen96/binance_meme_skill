@@ -1,123 +1,116 @@
+import requests
 import json
 import logging
-import httpx
-import re
-from openai import OpenAI
+import time
 from config import config
 
-# 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
-class GrokXAIAPI:
+class GrokAPI:
     """
-    封装 Grok (xAI) 的接口 - 社交安全审计鲁棒版
-    针对 Grok-4 返回非标准 JSON 的情况增加了强力解析逻辑
+    对接 xAI Grok 的接口，专职负责 Meme 币的社交潜力与病毒式传播分析
     """
 
     def __init__(self):
-        # 修复可能的代理冲突
-        http_client = httpx.Client(
-            follow_redirects=True,
-        )
+        self.api_key = config.GROK_API_KEY
+        self.base_url = config.GROK_BASE_URL
+        self.headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
 
-        self.client = OpenAI(
-            api_key=config.GROK_API_KEY,
-            base_url=config.GROK_BASE_URL,
-            http_client=http_client
-        )
-        # 采用旗舰推理模型
-        self.model = "grok-4"
-
-    def _extract_json(self, text: str) -> dict:
+    def analyze_meme_potential(self, token: dict, max_retries=2) -> dict:
         """
-        鲁棒地从模型返回的杂乱文本中提取并解析 JSON 对象
+        调用 Grok 分析代币的社交热度与病毒潜质
+        返回格式: {"rating": "S", "summary": "分析摘要"}
         """
-        try:
-            # 1. 尝试直接解析（理想情况）
-            return json.loads(text)
-        except json.JSONDecodeError:
-            # 2. 如果直接解析失败，尝试通过正则表达式匹配第一个 { 到最后一个 }
-            logging.warning("直接解析 JSON 失败，尝试正则提取...")
-            match = re.search(r'(\{.*\})', text, re.DOTALL)
-            if match:
-                try:
-                    return json.loads(match.group(1))
-                except json.JSONDecodeError:
-                    pass
+        if not self.api_key or self.api_key.startswith("xai-your"):
+            logging.warning("⚠️ GROK_API_KEY 未配置，跳过 AI 分析，默认返回 S 级(测试模式)")
+            return {"rating": "S", "summary": "[测试模式] 默认放行"}
 
-            # 3. 如果包含 Markdown 代码块，手动清理后再试
-            clean_text = text.replace("```json", "").replace("```", "").strip()
-            try:
-                return json.loads(clean_text)
-            except json.JSONDecodeError:
-                return None
+        symbol = token.get('symbol', 'Unknown')
+        ca = token.get('contractAddress', 'Unknown')
+        progress = token.get('progress', 0)
 
-    def analyze_token_traffic(self, token_data: dict) -> dict:
-        """
-        利用 Grok 进行社交层面的“反诈”分析，增加解析容错
-        """
-        symbol = token_data.get("symbol", "Unknown")
-        ca = token_data.get("contractAddress", "Unknown")
-        progress = token_data.get("progress", "Unknown")
-
-        # 强化提示词：要求 AI 严禁输出无关字符
+        # 核心 Prompt 优化：专注于社交共振与病毒潜力
         prompt = f"""
-        你现在是一名顶级的链上安全分析师。请通过 X (Twitter) 实时搜索功能审计以下代币。
+        你现在是一名顶级的 Web3 Degen 和 Meme 币星探。
+        你的任务是分析 Solana 链上的 Meme 代币：${symbol} 
+        合约地址(CA): {ca}
+        当前进度: {progress}%
 
-        【待审计代币】
-        - 符号: ${symbol}
-        - 合约地址: {ca}
-        - 进度: {progress}%
+        【分析焦点】
+        请忽略常规的合约安全审计（这部分已有其他系统完成）。你需要专注于 X (Twitter) 上的社交数据：
+        1. 病毒潜质 (Virality)：该代币的名称、Logo 或概念是否好玩、易于传播、具备做成表情包(Meme)的潜力？
+        2. 真实社区讨论：搜索推特，是否有真实的 Web3 玩家或 KOL 在讨论？还是全是 0 粉丝的机器人(Bot)账号在机械式发推？
+        3. 叙事契合度：它是否属于当前最热的叙事（如：AI 代理、热门动物、名流相关）？
 
-        【任务清单】
-        1. **反诈预警**：搜索 "{ca} rug" 或 "{ca} scam"，确认是否有真实的负面反馈。
-        2. **权限透明度**：开发者是否宣布销毁 LP 或丢弃权限？
-        3. **推特情绪**：辨别推文是机器人刷屏还是真实的 Web3 社区在讨论。
-        4. **KOL 背书**：是否有真实的大 V (50k+ followers) 在提及。
+        【评级标准】
+        - S级 (全仓抢入)：有知名 KOL 讨论，社区有自发的二创图片/视频，叙事顶级且新颖。
+        - A级 (半仓尝试)：有一定热度，概念不错，但社区文化还在初期酝酿中。
+        - F级 (放弃)：查无此币，或者全是僵尸号/机器人在刷屏，毫无真实社交共鸣。
 
-        【输出要求】
-        必须严格以 JSON 格式输出，严禁包含任何 Markdown 标记或解释。
-
-        {{
-            "rating": "S/A/B/F",
-            "summary": "100字内分析"
-        }}
+        【必须严格遵守的返回格式】
+        你必须且只能返回一段合法的 JSON 格式文本，不要包含任何 markdown 标记或其他多余文字。
+        示例: {{"rating": "S", "summary": "该币名称自带喜剧效果，已有2个中腰部KOL介入，社区二创活跃。"}}
         """
 
-        try:
-            logging.info(f"正在请求 Grok-4 进行社交防诈审计: ${symbol}...")
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system",
-                     "content": "你是一个极度严谨的防诈专家。仅输出 JSON，不解释，不输出 Markdown 代码块。"},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.1,  # 极低温度确保输出格式更稳定
-            )
+        payload = {
+            "model": "grok-2-latest",  # 确保使用最新支持 JSON 的模型
+            "messages": [
+                {"role": "system",
+                 "content": "You are a highly analytical AI that outputs ONLY strict JSON formatted data."},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.5,
+            "max_tokens": 300
+        }
 
-            result_text = response.choices[0].message.content.strip()
+        retries = 0
+        while retries <= max_retries:
+            try:
+                logging.info(f"🧠 [Grok] 开始对 {symbol} 进行社交体检 (第 {retries + 1} 次尝试)...")
+                response = requests.post(f"{self.base_url}/chat/completions", headers=self.headers, json=payload,
+                                         timeout=15)
+                response.raise_for_status()
 
-            # 使用增强的 JSON 提取方法
-            analysis_result = self._extract_json(result_text)
+                result_json = response.json()
+                content = result_json['choices'][0]['message']['content'].strip()
 
-            if not analysis_result:
-                logging.error(f"Grok 返回内容无法解析为 JSON: {result_text[:200]}...")
-                return {"rating": "F", "summary": "社交审计解析异常。出于资金安全考虑，自动判定为 F 级。"}
+                # 清洗可能带有的 markdown 标记
+                if content.startswith("```json"):
+                    content = content[7:]
+                if content.endswith("```"):
+                    content = content[:-3]
+                content = content.strip()
 
-            # 兜底校验核心字段
-            if "rating" not in analysis_result:
-                analysis_result["rating"] = "F"
+                parsed_data = json.loads(content)
 
-            logging.info(f"代币 ${symbol} 社交审计完成，最终评级: [{analysis_result.get('rating')}]")
-            return analysis_result
+                # 规范化评级
+                rating = parsed_data.get("rating", "F").upper()
+                if rating not in ["S", "A", "F"]:
+                    rating = "F"
 
-        except Exception as e:
-            logging.error(f"Grok API 请求过程中发生异常: {e}")
-            # 任何请求层面的失败都应判定为 F，防止因接口超时漏掉风险
-            return {"rating": "F", "summary": f"请求 Grok 失败，为了资金安全判定为 F 级。原因: {str(e)}"}
+                return {
+                    "rating": rating,
+                    "summary": parsed_data.get("summary", "Grok 返回了格式无法解析的摘要。")
+                }
+
+            except requests.exceptions.RequestException as e:
+                logging.warning(f"⚠️ [Grok] API 网络请求失败: {e}")
+                retries += 1
+                time.sleep(2)
+            except json.JSONDecodeError as e:
+                logging.error(f"❌ [Grok] 返回格式解析失败，非合法 JSON: {e} | 返回内容: {content}")
+                return {"rating": "F", "summary": "AI 返回格式异常，强制熔断保护。"}
+            except Exception as e:
+                logging.error(f"❌ [Grok] 发生未知错误: {e}")
+                return {"rating": "F", "summary": f"系统错误: {str(e)}"}
+
+        logging.error(f"❌ [Grok] 对 {symbol} 的分析在重试 {max_retries} 次后彻底失败。")
+        return {"rating": "F", "summary": "API 请求持续超时或失败。"}
 
 
-# 实例化
-grok_api = GrokXAIAPI()
+# 实例化单例
+grok_api = GrokAPI()

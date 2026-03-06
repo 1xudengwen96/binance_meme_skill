@@ -1,157 +1,260 @@
-import logging
 import time
+import logging
 from config import config
 from binance_api import binance_api
 from grok_api import grok_api
-from tg_bot import tg_bot
+from trade_engine import trade_engine
 from feishu_bot import feishu_bot
-from trade_engine import trader  # 引入交易引擎
 
-# 配置日志
+# 兼容原有的 TG Bot
+try:
+    from tg_bot import send_tg_message
+except ImportError:
+    send_tg_message = None
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
 class SniperEngine:
     """
-    核心扫盘引擎 - 全自动狙击作战版 (支持分仓策略 & 飞书全面同步)
+    加权评分制 Meme 狙击引擎 (V3 实战版)
+    集成了极速抢跑与买入后的自动雷达挂载机制
+    增加了一键启停(状态控制)功能
     """
 
     def __init__(self):
         self.chain_id = config.TARGET_CHAIN_ID
         self.seen_tokens = set()
-        self.last_hits = []
+        self.is_active = True  # 新增：控制引擎是否处于工作状态的开关，默认启动
 
-        # ==========================================
-        # 新增日志：检查自动交易钱包是否跑通
-        # ==========================================
-        if trader.wallet:
-            logging.info(f"✅ 自动交易引擎准备就绪！当前挂载钱包公钥: {trader.wallet.pubkey()}")
-            logging.info(
-                f"🔫 S级全仓购买量: {config.BUY_AMOUNT_SOL} SOL | A级半仓购买量: {config.BUY_AMOUNT_SOL * 0.5} SOL")
+    def set_active_state(self, state: bool):
+        """
+        供外部(如 API 接口/前端)调用的启停控制方法
+        """
+        self.is_active = state
+        if state:
+            logging.info("▶️ [状态切换] 引擎已唤醒，猎犬出笼，恢复打狗！")
         else:
-            logging.warning("⚠️ 未检测到有效私钥配置！交易引擎当前为【只读监控模式】，将不会执行任何真实买入操作。")
+            logging.info("⏸️ [状态切换] 引擎已暂停，进入休息状态。")
 
-    def is_token_physical_quality_fine(self, token: dict, rank_type: int) -> tuple:
+    def calculate_physical_score(self, token: dict, rank_type: int) -> tuple[int, list]:
+        """
+        计算物理基础分 (满分 40)
+        不再一票否决，而是记录扣分/加分原因
+        """
+        score = 0
+        reasons = []
+
         symbol = token.get("symbol", "Unknown")
         progress = float(token.get("progress", 0))
         protocol = token.get("protocol")
 
-        allowed_protocols = [1001, 2001, 2002]
-        if protocol not in allowed_protocols: return False, f"非主流协议 ({protocol})"
+        # 1. 协议白名单 (硬性过滤，非 Solana Pump/Four.meme 直接踢出)
+        if protocol not in [1001, 2001]:
+            return -1, [f"非目标协议({protocol})"]
 
-        if rank_type == 10 and progress < 50:
-            return False, f"新币进度尚浅 ({progress}%)"
-        elif rank_type == 20 and progress < 80:
-            return False, f"打满榜进度不足 ({progress}%)"
+        # 2. 进度得分 (10分)
+        if rank_type == 10 and progress >= 40:
+            score += 10
+            reasons.append(f"新币进度良好({progress}%)")
+        elif rank_type == 20 and progress >= 70:
+            score += 10
+            reasons.append(f"打满埋伏区({progress}%)")
+        elif rank_type == 30:
+            score += 10  # 已经 Migrated 的默认拿满进度分
 
-        if float(token.get("holdersTop10Percent", 100)) > 35: return False, f"筹码过分集中"
-        if float(token.get("devSellPercent", 0)) > 40: return False, f"开发者已撤退"
-        if float(token.get("marketCap", 0)) < 20000: return False, f"市值过低"
+        # 3. 筹码集中度得分 (20分)
+        holders_top10 = float(token.get("holdersTop10Percent", 100))
+        if holders_top10 <= 35:
+            score += 20
+            reasons.append(f"筹码极其分散({holders_top10}%)")
+        elif holders_top10 <= config.MAX_TOP10_HOLDING:  # 默认 55%
+            score += 10
+            reasons.append(f"筹码正常集中({holders_top10}%)")
+        else:
+            reasons.append(f"⚠️筹码过度集中({holders_top10}%)")
 
-        return True, "物理指标通过"
+        # 4. 开发者风险与市值 (10分)
+        dev_sell = float(token.get("devSellPercent", 0))
+        mcap = float(token.get("marketCap", 0))
 
-    def match_narrative_and_funds(self, token: dict, trending_topics: list, smart_inflow: list) -> dict:
+        if mcap >= config.MIN_MARKET_CAP:
+            score += 5
+            reasons.append(f"市值达标(${mcap:,.0f})")
+
+        if dev_sell < config.MAX_DEV_SELL or token.get("devPosition") != 2:
+            score += 5
+            reasons.append(f"开发者未清仓抛售")
+        else:
+            reasons.append(f"⚠️开发者已清仓")
+
+        return score, reasons
+
+    def calculate_weighted_score(self, token: dict, audit_data: dict, smart_money: dict, trending_topics: list) -> \
+    tuple[int, list]:
+        """
+        综合加权评分系统 (包含安全、资金、叙事)
+        """
+        total_score = 0
+        score_details = []
+
+        # 1. 物理基础分 (最高 40)
+        phys_score, phys_reasons = self.calculate_physical_score(token, token.get('rank_type_tracked', 20))
+        if phys_score < 0: return -1, phys_reasons  # 硬过滤未过
+        total_score += phys_score
+        score_details.extend(phys_reasons)
+
+        # 2. 深度安全分 (最高 20)
+        risk_level = audit_data.get("risk_level", 5)
+        if risk_level == 1:
+            total_score += 20
+            score_details.append("安全评级:极低风险")
+        elif risk_level == 2:
+            total_score += 10
+            score_details.append("安全评级:低风险")
+        elif risk_level >= 4:
+            # 极高风险直接熔断
+            return -1, ["🚨 币安安全审计: 高风险/极高风险"]
+
+        # 3. 聪明钱雷达 (最高 20)
+        sm_count = smart_money.get("smartMoneyCount", 0)
+        if sm_count >= 5:
+            total_score += 20
+            score_details.append(f"🔥 聪明钱扎堆({sm_count}个)")
+        elif sm_count >= 2:
+            total_score += 10
+            score_details.append(f"聪明钱流入({sm_count}个)")
+
+        # 4. 叙事共振分 (最高 20)
         symbol = token.get("symbol", "").upper()
-        ca = token.get("contractAddress", "").lower()
+        if any(topic.upper() in symbol or symbol in topic.upper() for topic in trending_topics):
+            total_score += 20
+            score_details.append(f"🚀 命中全网核心叙事")
 
-        result = {"narrative_hit": None, "smart_money_hit": False, "inflow_amount": 0}
+        return total_score, score_details
 
-        for topic in trending_topics:
-            topic_name = topic.get("name", {}).get("topicNameEn", "").upper()
-            if symbol in topic_name or topic_name in symbol:
-                result["narrative_hit"] = topic_name
-                break
+    def process_token_list(self, token_list: list, rank_type: int, list_name: str, trending_topics: list):
+        if not token_list: return
 
-        for item in smart_inflow:
-            if item.get("ca", "").lower() == ca:
-                result["smart_money_hit"] = True
-                result["inflow_amount"] = item.get("inflow", 0)
-                break
-
-        return result
-
-    def process_token_list(self, tokens: list, rank_type: int, rank_name: str, trending_topics: list,
-                           smart_inflow: list):
-        if not tokens: return
-
-        for token in tokens:
-            symbol = token.get("symbol", "Unknown")
+        for token in token_list:
             ca = token.get("contractAddress")
-
             if not ca or ca in self.seen_tokens: continue
 
-            is_fine, reason = self.is_token_physical_quality_fine(token, rank_type)
-            if not is_fine:
-                logging.info(f"⏩ [{rank_name}] 跳过 ${symbol}: {reason}")
+            # 标记来源榜单，供物理计分使用
+            token['rank_type_tracked'] = rank_type
+            symbol = token.get("symbol", "Unknown")
+
+            # 【阶段一】本地物理初筛 (快速拦截极度垃圾的币)
+            phys_score, _ = self.calculate_physical_score(token, rank_type)
+            if phys_score < 10:
+                # 连最基础的分数都拿不到，直接跳过，不浪费网络请求
                 self.seen_tokens.add(ca)
                 continue
 
-            context = self.match_narrative_and_funds(token, trending_topics, smart_inflow)
+            logging.info(f"🔍 发现潜力目标 [{list_name}]: {symbol} ({ca[:6]}...) | 初筛通过，开始深度数据拉取")
 
-            audit_result = binance_api.audit_token_security(self.chain_id, ca)
-            if not audit_result.get("is_safe"):
-                logging.warning(f"❌ [{rank_name}] 安全拦截 ${symbol}: {audit_result.get('reason')}")
+            # 【阶段二】深度数据聚合
+            audit_data = binance_api.get_token_audit(self.chain_id, ca)
+            smart_money = binance_api.get_smart_money_info(self.chain_id, ca)
+
+            # 计算综合评分
+            total_score, score_details = self.calculate_weighted_score(token, audit_data, smart_money, trending_topics)
+
+            if total_score < 0:
+                logging.info(f"🚫 {symbol} 过滤原因: {', '.join(score_details)}")
                 self.seen_tokens.add(ca)
                 continue
 
-            hit_msg = []
-            if context["narrative_hit"]: hit_msg.append(f"叙事:[{context['narrative_hit']}]")
-            if context["smart_money_hit"]: hit_msg.append(f"聪明钱:[${context['inflow_amount']}]")
-            tag = " | ".join(hit_msg) if hit_msg else "普通热度"
+            # 【阶段三】Grok 社交大脑终审
+            logging.info(f"📊 {symbol} 综合评分: {total_score} | 详情: {', '.join(score_details)}")
 
-            logging.info(f"💎 [{rank_name}] 锁定目标 ${symbol} ({tag}). 请求 Grok-4...")
+            if total_score >= config.GROK_SCORE_THRESHOLD:
+                logging.info(f"🧠 {symbol} 达标(>={config.GROK_SCORE_THRESHOLD})，呼叫 Grok 分析病毒潜质...")
+                grok_result = grok_api.analyze_meme_potential(token)
+                rating = grok_result.get("rating", "F")
+                summary = grok_result.get("summary", "无")
+
+                final_score = total_score
+                if rating == "S":
+                    final_score += 30
+                elif rating == "A":
+                    final_score += 15
+                elif rating == "F":
+                    final_score -= 50  # 负面情绪直接扣除
+
+                logging.info(f"🏁 {symbol} 最终得分: {final_score} (含Grok) | 评级: {rating}")
+
+                # 【阶段四】执行交易决策
+                if final_score >= 85:  # S级，高确定性
+                    self._execute_trade_and_notify(token, "S", final_score, summary, score_details,
+                                                   config.SLIPPAGE_S_GRADE)
+                elif final_score >= 65:  # A级，值得尝试
+                    # 买入 50% 额度
+                    token['override_buy_amount'] = config.BUY_AMOUNT_SOL * 0.5
+                    self._execute_trade_and_notify(token, "A", final_score, summary, score_details,
+                                                   config.SLIPPAGE_A_GRADE)
+                else:
+                    logging.info(f"📉 {symbol} 最终得分不足以开单 ({final_score})")
+
+            else:
+                logging.info(f"💤 {symbol} 评分({total_score})未达标，不调用 Grok")
 
             self.seen_tokens.add(ca)
-            analysis_payload = {**token, **context}
-            grok_analysis = grok_api.analyze_token_traffic(analysis_payload)
 
-            rating = grok_analysis.get("rating", "F")
+    def _execute_trade_and_notify(self, token, grade, score, summary, details, slippage_bps):
+        symbol = token.get("symbol")
+        ca = token.get("contractAddress")
+        buy_amount = token.get('override_buy_amount', config.BUY_AMOUNT_SOL)
 
-            if rating in ["S", "A"]:
-                logging.info(f"🚀 [{rank_name}] 确认金狗 ${symbol} (评级 {rating})！")
-                token_with_context = {**token, "context": context}
-                self.last_hits.append(token_with_context)  # 加入供 API 获取
+        msg = (
+            f"🎯 <b>发现 {grade} 级目标！(评分: {score})</b>\n\n"
+            f"🪙 <b>代币</b>: {symbol}\n"
+            f"📍 <b>CA</b>: <code>{ca}</code>\n"
+            f"📈 <b>进度</b>: {token.get('progress')}% | <b>市值</b>: ${float(token.get('marketCap', 0)):,.0f}\n"
+            f"💡 <b>得分亮点</b>: {', '.join(details)}\n\n"
+            f"🧠 <b>Grok 洞察</b>: {summary}\n\n"
+            f"⚡ 准备执行买入: {buy_amount} SOL (滑点: {slippage_bps / 100}%)"
+        )
 
-                # 发送发现信号通知，确保 TG 和飞书都收到
-                tg_bot.format_and_send_alert(token_with_context, grok_analysis)
-                if hasattr(feishu_bot, 'format_and_send_alert'):
-                    feishu_bot.format_and_send_alert(token_with_context, grok_analysis)
+        logging.info(f"🚀 准备买入 {symbol} | 评级 {grade}")
 
-                # ==========================================
-                # 分仓自动买入触发逻辑
-                # S 级买 100% 设定份额，A 级买 50% 设定份额
-                # ==========================================
-                if rating == "S":
-                    logging.info(f"🔥 S级极品！触发全额买入策略")
-                    trader.buy_token(token_with_context, amount_multiplier=1.0)
-                elif rating == "A":
-                    logging.info(f"👍 A级优质！触发半仓买入策略")
-                    trader.buy_token(token_with_context, amount_multiplier=0.5)
-            else:
-                logging.info(f"🛑 [{rank_name}] 放弃 ${symbol}: Grok 评级 {rating}")
+        # 发送通知
+        if feishu_bot.webhook_url and "feishu" in feishu_bot.webhook_url:
+            feishu_bot.send_text(
+                msg.replace("<b>", "").replace("</b>", "").replace("<code>", "").replace("</code>", ""))
+        elif send_tg_message:
+            send_tg_message(msg)
 
-            time.sleep(1)
+        # 执行极速买入
+        tx_sig = trade_engine.execute_swap(ca, "buy", amount_sol=buy_amount, slippage_bps=slippage_bps)
+
+        if tx_sig:
+            success_msg = f"✅ <b>买入成功!</b>\n代币: {symbol}\nTx: <code>{tx_sig}</code>"
+            if feishu_bot.webhook_url:
+                feishu_bot.send_text(success_msg.replace("<b>", "").replace("</b>", ""))
+            elif send_tg_message:
+                send_tg_message(success_msg)
+
+            # 👉 【核心联动】买入成功后，无缝挂载后台自动盯盘雷达，保护利润与止损！
+            logging.info(f"🛡️ 为 {symbol} 挂载自动防守雷达...")
+            trade_engine.start_monitor_thread(ca, symbol, buy_amount)
+
+        else:
+            logging.error(f"❌ {symbol} 买入失败")
 
     def run_scan_cycle(self):
-        logging.info("=" * 50)
-        logging.info("🌍 正在抓取全局背景：叙事热点 & 聪明钱流向...")
+        # 👉 核心拦截逻辑：如果已被前端置为休息状态，直接跳过本轮打狗
+        if not getattr(self, 'is_active', True):
+            logging.info("💤 引擎休息中... (可通过前端一键启动)")
+            return
+
+        logging.info("🌍 同步大盘叙事...")
         trending_topics = binance_api.get_trending_topics(self.chain_id)
-        smart_inflow = binance_api.get_smart_money_inflow(self.chain_id)
 
-        logging.info(f"轨道 A: 轮询 {self.chain_id} 【即将打满】名单...")
+        logging.info(f"⚡ 扫描轨道: {self.chain_id} [Finalizing]...")
         final_tokens = binance_api.get_memes(chain_id=self.chain_id, rank_type=20)
-        self.process_token_list(final_tokens, 20, "打满榜", trending_topics, smart_inflow)
+        self.process_token_list(final_tokens, 20, "打满榜", trending_topics)
 
-        logging.info(f"轨道 B: 轮询 {self.chain_id} 【高热新币】名单...")
+        logging.info(f"👶 扫描轨道: {self.chain_id} [New]...")
         new_tokens = binance_api.get_memes(chain_id=self.chain_id, rank_type=10)
-        self.process_token_list(new_tokens, 10, "新币榜", trending_topics, smart_inflow)
-
-        logging.info(f"轨道 C: 轮询 {self.chain_id} 【刚刚迁移】名单...")
-        migrated_tokens = binance_api.get_memes(chain_id=self.chain_id, rank_type=30)
-        self.process_token_list(migrated_tokens, 30, "已迁移榜", trending_topics, smart_inflow)
-
-        logging.info("本轮智能扫盘结束。")
-        logging.info("=" * 50)
-
-
-engine = SniperEngine()
+        self.process_token_list(new_tokens, 10, "新币榜", trending_topics)

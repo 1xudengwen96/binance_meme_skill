@@ -1,212 +1,217 @@
-import time
+import base64
 import logging
+import time
 import requests
+import json
 import base58
-from config import config
+import threading
+from solana.rpc.api import Client
 from solders.keypair import Keypair
 from solders.transaction import VersionedTransaction
-from solana.rpc.api import Client
-from tg_bot import tg_bot
-from feishu_bot import feishu_bot
+from config import config
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
 class TradeEngine:
     """
-    Solana 自动交易引擎：对接 Jupiter API 进行极速 Swap，并执行四维动态出货策略
+    Solana 极速狙击与风控引擎 (Jupiter V6 接入)
+    具备: 极速抢跑、自动余额追踪、翻倍抽本、动态追踪止损(Trailing Stop)
     """
 
     def __init__(self):
         self.rpc_url = config.SOL_RPC_URL
         self.client = Client(self.rpc_url)
-        self.buy_amount_sol = config.BUY_AMOUNT_SOL
-        self.sol_mint = "So11111111111111111111111111111111111111112"
+        self.private_key = config.SOL_PRIVATE_KEY
+        self.keypair = None
 
-        # 记录仓位状态
-        # 结构: { "CA": {"symbol": "", "token_balance_raw": 0, "cost_basis_sol": 0.0, "highest_value_sol": 0.0, "status": "FULL"/"MOONBAG"} }
-        self.active_positions = {}
+        # 统一钱包加载逻辑
+        if self.private_key:
+            try:
+                if self.private_key.startswith('['):
+                    secret = json.loads(self.private_key)
+                    self.keypair = Keypair.from_bytes(bytes(secret))
+                else:
+                    self.keypair = Keypair.from_bytes(base58.b58decode(self.private_key))
+                logging.info(f"✅ [TradeEngine] 钱包已加载，公钥: {self.keypair.pubkey()}")
+            except Exception as e:
+                logging.error(f"⚠️ [TradeEngine] 私钥解析失败，请检查 .env。当前处于【模拟模式】。错误: {e}")
 
+        # W-SOL 合约地址
+        self.wsol = "So11111111111111111111111111111111111111112"
+
+    def get_token_balance(self, token_address: str) -> int:
+        """获取钱包中指定代币的真实余额 (最小单位)"""
+        if not self.keypair: return 0
         try:
-            if config.SOL_PRIVATE_KEY:
-                raw_pk = base58.b58decode(config.SOL_PRIVATE_KEY)
-                self.wallet = Keypair.from_bytes(raw_pk)
-                logging.info(f"🔑 交易钱包加载成功! 地址: {self.wallet.pubkey()}")
-            else:
-                self.wallet = None
-                logging.warning("⚠️ 未配置 SOL_PRIVATE_KEY，自动交易系统将以模拟模式(只读)运行。")
+            payload = {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "getTokenAccountsByOwner",
+                "params": [
+                    str(self.keypair.pubkey()),
+                    {"mint": token_address},
+                    {"encoding": "jsonParsed"}
+                ]
+            }
+            resp = requests.post(self.rpc_url, json=payload, timeout=10).json()
+            accounts = resp.get("result", {}).get("value", [])
+            if not accounts: return 0
+
+            amount_str = accounts[0]["account"]["data"]["parsed"]["info"]["tokenAmount"]["amount"]
+            return int(amount_str)
         except Exception as e:
-            self.wallet = None
-            logging.error(f"❌ 私钥解析失败: {e}")
+            logging.error(f"❌ [TradeEngine] 获取余额失败: {e}")
+            return 0
 
-    def check_gas_and_balance(self) -> bool:
-        """购买前检查余额：预留 0.01 SOL 作为 Gas"""
-        if not self.wallet: return False
-        try:
-            balance_resp = self.client.get_balance(self.wallet.pubkey())
-            balance_lamports = balance_resp.value
-            balance_sol = balance_lamports / 1e9
+    def execute_swap(self, token_address: str, action: str = "buy", amount_sol: float = None, slippage_bps: int = None,
+                     sell_percentage: int = 100) -> str:
+        """执行 Swap 操作 (极限压缩上链时间)"""
+        if not self.keypair:
+            logging.warning(f"🛑 [模拟模式] 拦截 {action} 交易 -> 代币: {token_address}")
+            return "simulated_tx_signature_123456789"
 
-            required_sol = self.buy_amount_sol + 0.01
-            if balance_sol < required_sol:
-                logging.error(f"💸 余额不足! 当前: {balance_sol:.4f} SOL, 需要: {required_sol:.4f} SOL")
-                return False
-            return True
-        except Exception as e:
-            logging.error(f"❌ 查账失败: {e}")
-            return False
+        if slippage_bps is None: slippage_bps = config.SLIPPAGE_DEFAULT
 
-    def execute_swap(self, input_mint: str, output_mint: str, amount_in_lamports: int, slippage_bps: int = 500) -> dict:
-        """调用 Jupiter API 执行 Swap"""
-        if not self.wallet: return {"success": False, "reason": "无钱包配置"}
+        if action == "buy":
+            amount_sol = amount_sol or config.BUY_AMOUNT_SOL
+            trade_amount = int(amount_sol * 1e9)
+            input_mint, output_mint = self.wsol, token_address
+        else:
+            total_token_amount = self.get_token_balance(token_address)
+            if total_token_amount <= 0: return None
+            trade_amount = int(total_token_amount * (sell_percentage / 100.0))
+            if trade_amount <= 0: return None
+            input_mint, output_mint = token_address, self.wsol
+
+        priority_fee_lamports = int(config.SOL_PRIORITY_FEE * 1e9)
+
         try:
             # 1. 获取报价
-            quote_url = f"https://quote-api.jup.ag/v6/quote?inputMint={input_mint}&outputMint={output_mint}&amount={amount_in_lamports}&slippageBps={slippage_bps}"
-            quote_res = requests.get(quote_url, timeout=10).json()
+            quote_url = f"https://quote-api.jup.ag/v6/quote?inputMint={input_mint}&outputMint={output_mint}&amount={trade_amount}&slippageBps={slippage_bps}"
+            quote_resp = requests.get(quote_url, timeout=10).json()
+            if "error" in quote_resp: return None
 
-            if "error" in quote_res:
-                return {"success": False, "reason": f"报价失败: {quote_res['error']}"}
-
-            # 2. 构建交易
+            # 2. 构造带优先费的交易
             swap_url = "https://quote-api.jup.ag/v6/swap"
             payload = {
-                "quoteResponse": quote_res,
-                "userPublicKey": str(self.wallet.pubkey()),
-                "wrapAndUnwrapSol": True
+                "quoteResponse": quote_resp,
+                "userPublicKey": str(self.keypair.pubkey()),
+                "wrapAndUnwrapSol": True,
+                "prioritizationFeeLamports": priority_fee_lamports
             }
-            swap_res = requests.post(swap_url, json=payload, timeout=10).json()
+            swap_resp = requests.post(swap_url, json=payload, timeout=15).json()
+            if "error" in swap_resp: return None
 
-            if "swapTransaction" not in swap_res:
-                return {"success": False, "reason": "未获取到交易体"}
+            # 3. 签名并跳过预检广播 (skip_preflight=True)
+            tx_bytes = base64.b64decode(swap_resp["swapTransaction"])
+            tx = VersionedTransaction.from_bytes(tx_bytes)
+            signed_tx = VersionedTransaction(tx.message, [self.keypair])
 
-            # 3. 签名并发送
-            raw_tx = base58.b58decode(swap_res['swapTransaction'])
-            tx = VersionedTransaction.from_bytes(raw_tx)
-            signed_tx = VersionedTransaction(tx.message, [self.wallet])
-
-            tx_sig = self.client.send_raw_transaction(bytes(signed_tx)).value
-            return {"success": True, "tx_hash": str(tx_sig), "expected_out": quote_res.get("outAmount")}
+            result = self.client.send_raw_transaction(bytes(signed_tx), opts={"skip_preflight": True, "max_retries": 3})
+            logging.info(f"✅ [Solana] {action.upper()} 交易已极速广播! 签名: {result.value}")
+            return str(result.value)
 
         except Exception as e:
-            return {"success": False, "reason": str(e)}
+            logging.error(f"❌ [TradeEngine] 交易执行异常: {e}")
+            return None
 
-    def buy_token(self, token: dict):
-        """全自动买入指令"""
-        symbol = token.get("symbol", "UNKNOWN")
-        ca = token.get("contractAddress")
+    # ==========================
+    # 实战风控宏与后台雷达
+    # ==========================
+    def sell_panic(self, token_address: str) -> str:
+        logging.warning(f"🚨 触发恐慌清仓! 不计成本卖出: {token_address}")
+        return self.execute_swap(token_address, action="sell", slippage_bps=2000, sell_percentage=100)
 
-        if ca in self.active_positions: return
-        if not self.check_gas_and_balance(): return
+    def sell_half_for_profit(self, token_address: str) -> str:
+        logging.info(f"💰 触发翻倍抽本! 卖出 50% 仓位锁定利润: {token_address}")
+        return self.execute_swap(token_address, action="sell", slippage_bps=1000, sell_percentage=50)
 
-        logging.info(f"⚡ [TradeEngine] 发起攻击: 买入 ${symbol} ({self.buy_amount_sol} SOL)...")
-        amount_lamports = int(self.buy_amount_sol * 1e9)
+    def _monitor_position(self, token_address: str, symbol: str, cost_sol: float):
+        """后台死盯逻辑：保护利润，隔绝深套"""
+        cost_lamports = int(cost_sol * 1e9)
+        logging.info(f"👀 [雷达] 开启 {symbol} 战术监控 | 成本: {cost_sol} SOL")
 
-        res = self.execute_swap(self.sol_mint, ca, amount_lamports, slippage_bps=500)
-
-        if res["success"]:
-            logging.info(f"✅ 买入成功! 哈希: {res['tx_hash']}")
-            tokens_received = int(res["expected_out"])
-
-            # 登记仓位
-            self.active_positions[ca] = {
-                "symbol": symbol,
-                "token_balance_raw": tokens_received,
-                "cost_basis_sol": self.buy_amount_sol,
-                "highest_value_sol": self.buy_amount_sol,
-                "status": "FULL"
-            }
-            msg = f"🛒 **已自动买入**: ${symbol}\n投入: {self.buy_amount_sol} SOL\nTX: `{res['tx_hash']}`"
-            tg_bot.send_message(msg)
-            feishu_bot.send_message(msg) if hasattr(feishu_bot, 'send_message') else None
-        else:
-            logging.error(f"❌ 买入失败: {res['reason']}")
-
-    def sell_token(self, ca: str, percentage: float, reason: str):
-        """自动出货逻辑 (支持按比例卖出)"""
-        pos = self.active_positions.get(ca)
-        if not pos: return
-
-        symbol = pos["symbol"]
-        amount_to_sell = int(pos["token_balance_raw"] * percentage)
-
-        logging.info(f"📉 [TradeEngine] 执行出货: ${symbol} ({percentage * 100}%). 原因: {reason}")
-
-        # 卖出滑点调高到 10% (1000 bps) 保证能跑掉
-        res = self.execute_swap(ca, self.sol_mint, amount_to_sell, slippage_bps=1000)
-
-        if res["success"]:
-            actual_sol_received = int(res.get("expected_out", 0)) / 1e9
-            logging.info(f"✅ 卖出成功! 预计回收: {actual_sol_received:.4f} SOL")
-
-            msg = f"💰 **自动出货**: ${symbol}\n出货比例: {percentage * 100}%\n触发规则: {reason}\nTX: `{res['tx_hash']}`"
-            tg_bot.send_message(msg)
-
-            if percentage >= 1.0:
-                del self.active_positions[ca]
-            else:
-                pos["status"] = "MOONBAG"
-                pos["token_balance_raw"] -= amount_to_sell
-                pos["cost_basis_sol"] *= (1 - percentage)
-                pos["highest_value_sol"] = 0  # 重置最高点
-        else:
-            logging.error(f"❌ 卖出失败: {res['reason']}")
-
-    def get_position_value_in_sol(self, ca: str, raw_amount: int) -> float:
-        """通过 Jupiter 询价获取当前仓位的 SOL 价值"""
-        if raw_amount <= 0: return 0.0
-        try:
-            url = f"https://quote-api.jup.ag/v6/quote?inputMint={ca}&outputMint={self.sol_mint}&amount={raw_amount}"
-            res = requests.get(url, timeout=5).json()
-            if "outAmount" in res:
-                return int(res["outAmount"]) / 1e9
-            return 0.0
-        except:
-            return 0.0
-
-    def monitor_positions_loop(self):
-        """出货策略雷达：四维动态监控"""
-        logging.info("🛡️ 出货策略雷达 (Smart Exit Matrix) 已启动")
-        while True:
-            try:
-                for ca, pos in list(self.active_positions.items()):
-                    current_value_sol = self.get_position_value_in_sol(ca, pos["token_balance_raw"])
-                    if current_value_sol <= 0: continue
-
-                    cost_basis = pos["cost_basis_sol"]
-                    ath = pos["highest_value_sol"]
-                    status = pos["status"]
-
-                    # 刷新最高价值
-                    if current_value_sol > ath:
-                        self.active_positions[ca]["highest_value_sol"] = current_value_sol
-                        ath = current_value_sol
-
-                    roi = (current_value_sol - cost_basis) / cost_basis if cost_basis > 0 else 0
-                    drawdown = (current_value_sol - ath) / ath if ath > 0 else 0
-
-                    # === 维度一：刚性防御 (硬止损 -35%) ===
-                    if roi <= -0.35:
-                        self.sell_token(ca, 1.0, f"刚性止损 (盈亏: {roi * 100:.2f}%)")
-                        continue
-
-                    # === 维度二：翻倍抽本 (Moonbag) ===
-                    if status == "FULL" and roi >= 1.0:
-                        self.sell_token(ca, 0.5, f"翻倍抽本 (盈亏: {roi * 100:.2f}%)，开启Moonbag")
-                        continue
-
-                    # === 维度三：动态追踪逃顶 ===
-                    if status == "MOONBAG" and drawdown <= -0.25:
-                        self.sell_token(ca, 1.0, f"追踪逃顶 (最高回撤达 25%)，利润落袋")
-                        continue
-                    elif status == "FULL" and drawdown <= -0.30 and roi > 0.2:
-                        self.sell_token(ca, 1.0, f"提前逃顶 (未翻倍但利润回撤破防)")
-                        continue
-
-            except Exception as e:
-                logging.error(f"出货监控异常: {e}")
-
+        # 1. 确认代币到账 (防链上拥堵延迟)
+        balance = 0
+        for _ in range(12):  # 最多等 60 秒
+            balance = self.get_token_balance(token_address)
+            if balance > 0: break
             time.sleep(5)
 
+        if balance <= 0:
+            logging.error(f"❌ [雷达] {symbol} 迟迟未确认到账，监控终止。")
+            return
 
-# 实例化单例
-trader = TradeEngine()
+        logging.info(f"✅ [雷达] {symbol} 代币已确认入库，进入防守模式...")
+
+        # 核心战术参数
+        stop_loss_pct = -0.30  # 铁血止损线: 跌 30% 砍仓
+        take_profit_pct = 1.00  # 翻倍抽本线: 涨 100% 卖半仓
+        trailing_activation = 0.40  # 追踪止损激活线: 涨 40% 激活
+        trailing_stop_pct = 0.15  # 追踪保本线: 锁定至少 15% 利润
+
+        max_pnl_pct = 0.0  # 记录历史最高盈亏比
+        is_moonbag = False  # 是否已经是抽本后的零成本底仓
+
+        while True:
+            try:
+                time.sleep(4)  # 每4秒查一次 Jupiter 报价
+
+                current_balance = self.get_token_balance(token_address)
+                if current_balance <= 0:
+                    logging.info(f"🛑 [雷达] {symbol} 余额已归零，自动销毁监控线程。")
+                    break
+
+                quote_url = f"https://quote-api.jup.ag/v6/quote?inputMint={token_address}&outputMint={self.wsol}&amount={current_balance}&slippageBps=100"
+                resp = requests.get(quote_url, timeout=5).json()
+                if "error" in resp: continue
+
+                current_value = int(resp.get("outAmount", 0))
+
+                # 如果已经是格局仓，盈亏比计算基准改变，只要不跌破防线就一直拿
+                if is_moonbag:
+                    pnl_pct = (current_value - cost_lamports) / cost_lamports if cost_lamports > 0 else 0
+                else:
+                    pnl_pct = (current_value - cost_lamports) / cost_lamports
+
+                if pnl_pct > max_pnl_pct: max_pnl_pct = pnl_pct
+
+                # 计算动态止损线：如果曾涨超40%，止损线上移到+15%；否则维持-30%
+                curr_stop = trailing_stop_pct if (
+                            max_pnl_pct >= trailing_activation and not is_moonbag) else stop_loss_pct
+
+                status_icon = "🟢" if pnl_pct > 0 else "🔴"
+                logging.info(
+                    f"📊 [雷达-{symbol}] 估值: {current_value / 1e9:.4f} SOL | 浮动盈亏: {status_icon} {pnl_pct * 100:.1f}% (最高: {max_pnl_pct * 100:.1f}%) | 触发线: {curr_stop * 100:.1f}%")
+
+                # 执行防守反击
+                if pnl_pct <= curr_stop:
+                    reason = "追踪止损(保利润)" if max_pnl_pct >= trailing_activation else "硬止损(断臂求生)"
+                    logging.warning(f"🚨 [雷达] {symbol} 击穿防线，触发 {reason}，立刻清仓！")
+                    self.sell_panic(token_address)
+                    break
+
+                elif pnl_pct >= take_profit_pct and not is_moonbag:
+                    logging.info(f"🚀 [雷达] {symbol} 达成翻倍 (+{pnl_pct * 100:.1f}%)! 自动抽本...")
+                    self.sell_half_for_profit(token_address)
+                    # 转化为 Moonbag 格局模式
+                    is_moonbag = True
+                    cost_lamports = current_value // 2  # 重新设定锚点
+                    max_pnl_pct = 0
+                    stop_loss_pct = -0.40  # 格局仓容忍 40% 波动
+                    logging.info(f"🛡️ [雷达] {symbol} 本金已安全撤出！剩余免费筹码将持续格局监控...")
+
+            except Exception as e:
+                logging.error(f"⚠️ [雷达] 巡逻异常: {e}")
+                time.sleep(3)
+
+    def start_monitor_thread(self, token_address: str, symbol: str, cost_sol: float):
+        """挂载后台雷达线程 (非阻塞)"""
+        t = threading.Thread(target=self._monitor_position, args=(token_address, symbol, cost_sol))
+        t.daemon = True
+        t.start()
+
+
+# 实例化引擎单例
+trade_engine = TradeEngine()
