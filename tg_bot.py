@@ -9,7 +9,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 class TelegramBot:
     """
     封装 Telegram 机器人相关的推送功能
-    优化排版以支持一键复制，并深度集成币安 Web3 钱包
+    升级版：支持叙事与聪明钱情报展示，深度集成币安 Web3 钱包
     """
 
     def __init__(self):
@@ -43,12 +43,18 @@ class TelegramBot:
 
     def format_and_send_alert(self, token_data: dict, grok_analysis: dict) -> bool:
         """
-        组装金狗战报：支持点击即复制 CA，且按钮直达币安 Web3 钱包
+        组装金狗战报：整合叙事、聪明钱情报，并支持直达币安 Web3 钱包
         """
         symbol = token_data.get("symbol", "Unknown")
         ca = token_data.get("contractAddress", "Unknown")
-        chain_id = token_data.get("chainId", "CT_501")  # 默认 Solana
+        chain_id = token_data.get("chainId", "CT_501")
         progress = token_data.get("progress", "Unknown")
+
+        # 提取进阶情报 (由 sniper_engine 传入的 context)
+        context = token_data.get("context", {})
+        narrative = context.get("narrative_hit")
+        smart_money = context.get("smart_money_hit")
+        inflow = context.get("inflow_amount", 0)
 
         # 市值美化
         mcap_raw = token_data.get("marketCap", "0")
@@ -60,17 +66,23 @@ class TelegramBot:
         rating = grok_analysis.get("rating", "Unknown")
         summary = grok_analysis.get("summary", "无摘要")
 
-        # 针对币安 Web3 钱包的 deeplink 构造
-        # 手机端会自动唤起币安 App
+        # 币安 Web3 直达链接
         binance_swap_url = f"https://www.binance.com/zh-CN/web3wallet/dex/swap?chainId={chain_id}&toTokenAddress={ca}"
         binance_chart_url = f"https://www.binance.com/zh-CN/web3wallet/dex/chart?chainId={chain_id}&address={ca}"
 
         # 评级 Emoji
         rating_emoji = {"S": "🔥", "A": "✅", "B": "👀", "F": "❌"}.get(rating, "ℹ️")
 
+        # 组装情报标签
+        tags = []
+        if narrative: tags.append(f"🏷️ **热门叙事**: #{narrative}")
+        if smart_money: tags.append(f"🐳 **聪明钱**: 净流入 ${float(inflow):,.0f}")
+        tag_str = "\n".join(tags) if tags else "🔹 **热度**: 普通波动"
+
         # --- 组装 Markdown ---
-        # 注意：ca 被包裹在单反引号内，手机端点击即可复制
-        msg = f"""🚨 **发现潜在金狗：${symbol}**
+        msg = f"""🚨 **发现潜力金狗：${symbol}**
+
+{tag_str}
 
 📊 **链上指标**：
 - 进度：{progress}% (即将打满)
@@ -80,7 +92,7 @@ class TelegramBot:
 🐦 **Grok 社交透视 [{rating_emoji} {rating}级]**：
 _{summary}_
 
-🎯 **一键复制合约 (点击下方地址)**：
+🎯 **一键复制合约**：
 `{ca}`
 
 ⚡ **快捷操作 (直达币安 App)**：

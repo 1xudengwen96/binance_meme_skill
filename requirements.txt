@@ -1,16 +1,23 @@
-#核心请求库
+#核心网络请求
 
-requests==2.31.0
+requests>=2.31.0
+httpx>=0.24.0
+openai>=1.3.0
 
-#环境变量管理
+#环境变量与配置
 
-python-dotenv==1.0.1
+python-dotenv>=1.0.0
 
-#Grok (xAI) 接入，建议使用较新版本以修复代理兼容性问题
+#任务调度
 
-openai>=1.50.0
-httpx>=0.27.0
+schedule>=1.2.0
 
-#任务定时调度器
+#API 服务器 (用于前端大盘)
 
-schedule==1.2.1
+fastapi>=0.104.0
+uvicorn>=0.24.0
+pydantic>=2.4.0
+
+#异步支持
+
+asyncio>=3.4.3

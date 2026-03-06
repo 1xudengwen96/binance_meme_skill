@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Meme Hunter Pro | 实时作战大盘</title>
+    <!-- 引入 Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 React 和 Babel -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+    <!-- 引入 Lucide 图标 -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;900&display=swap');
+        body { background-color: #020617; }
+        .font-cyber { font-family: 'Orbitron', sans-serif; }
+        .glass-panel {
+            background: rgba(15, 23, 42, 0.6);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(51, 65, 85, 0.5);
+        }
+    </style>
+</head>
+<body class="text-slate-200">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        // --- 配置 ---
+        // 自动适配后端地址
+        const API_BASE = window.location.origin === "null" ? "http://localhost:8000" : window.location.origin;
+
+        // 图标组件组件化
+        const Icon = ({ name, className }) => {
+            useEffect(() => {
+                if (window.lucide) {
+                    window.lucide.createIcons();
+                }
+            }, [name]);
+            return <i data-lucide={name} className={className}></i>;
+        };
+
+        const RatingBadge = ({ rating }) => {
+            const colors = {
+                S: "bg-red-500/20 text-red-500 border-red-500/50 animate-pulse",
+                A: "bg-orange-500/20 text-orange-500 border-orange-500/50",
+                B: "bg-blue-500/20 text-blue-500 border-blue-500/50",
+                F: "bg-gray-500/20 text-gray-400 border-gray-500/50"
+            };
+            return (
+                <div className={`px-3 py-1 rounded-full border text-[10px] font-black tracking-widest uppercase ${colors[rating] || colors.F}`}>
+                    {rating} Grade
+                </div>
+            );
+        };
+
+        const TokenCard = ({ token }) => {
+            const [copied, setCopied] = useState(false);
+
+            const copyToClipboard = () => {
+                const textArea = document.createElement("textarea");
+                textArea.value = token.contractAddress;
+                document.body.appendChild(textArea);
+                textArea.select();
+                document.execCommand('copy');
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2000);
+                document.body.removeChild(textArea);
+            };
+
+            const binanceSwapUrl = `https://www.binance.com/zh-CN/web3wallet/dex/swap?chainId=${token.chainId}&toTokenAddress=${token.contractAddress}`;
+            const binanceChartUrl = `https://www.binance.com/zh-CN/web3wallet/dex/chart?chainId=${token.chainId}&address=${token.contractAddress}`;
+
+            return (
+                <div className="glass-panel rounded-2xl p-6 hover:border-blue-500/50 transition-all group overflow-hidden relative">
+                    <div className={`absolute -top-10 -right-10 w-32 h-32 blur-3xl opacity-10 rounded-full ${token.rating === 'S' ? 'bg-red-500' : 'bg-blue-500'}`} />
+
+                    <div className="flex justify-between items-start mb-4">
+                        <div>
+                            <h3 className="text-2xl font-black text-white flex items-center gap-2 italic">
+                                ${token.symbol}
+                                {token.rating === 'S' && <Icon name="flame" className="w-5 h-5 text-red-500" />}
+                            </h3>
+                            <p className="text-slate-500 text-[10px] font-mono uppercase mt-1">
+                                {token.chainId === 'CT_501' ? 'Solana' : 'BSC'} · {token.protocol === 1001 ? 'Pump.fun' : 'Four.meme'}
+                            </p>
+                        </div>
+                        <RatingBadge rating={token.rating} />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4 mb-6">
+                        <div className="bg-slate-800/40 rounded-xl p-3 border border-white/5">
+                            <p className="text-slate-500 text-[9px] uppercase font-black mb-1">市值</p>
+                            <p className="text-white font-bold text-lg tabular-nums">${Number(token.marketCap).toLocaleString()}</p>
+                        </div>
+                        <div className="bg-slate-800/40 rounded-xl p-3 border border-white/5">
+                            <p className="text-slate-500 text-[9px] uppercase font-black mb-1">打满进度</p>
+                            <div className="flex items-center gap-2">
+                                <div className="flex-1 h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                                    <div className="h-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.5)]" style={{ width: `${token.progress}%` }} />
+                                </div>
+                                <span className="text-white font-bold text-xs">{token.progress}%</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    {token.context?.narrative_hit && (
+                        <div className="mb-4">
+                            <div className="flex items-center gap-2 text-blue-400 text-[9px] font-black uppercase mb-2">
+                                <Icon name="globe" className="w-3 h-3" /> 命中叙事
+                            </div>
+                            <div className="px-3 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-300 text-[10px] font-bold inline-block">
+                                #{token.context.narrative_hit}
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="bg-slate-950/40 rounded-xl p-4 border border-slate-800/50 mb-6">
+                        <p className="text-slate-500 text-[9px] font-black uppercase mb-2 flex items-center gap-1">
+                            <Icon name="terminal" className="w-3 h-3 text-purple-400" /> Grok 深度审计
+                        </p>
+                        <p className="text-slate-300 text-[11px] font-medium leading-relaxed italic line-clamp-3">
+                            {token.grokSummary || "正在通过 X (Twitter) 检索社交共振数据..."}
+                        </p>
+                    </div>
+
+                    <div className="flex items-center justify-between mb-6 px-1 text-[9px] font-black uppercase tracking-tighter">
+                        <div className="flex flex-col">
+                            <span className="text-slate-600">聪明钱流入</span>
+                            <span className={`text-xs ${token.context?.smart_money_hit ? 'text-green-400' : 'text-slate-400'}`}>
+                                ${Number(token.context?.inflow_amount || 0).toLocaleString()}
+                            </span>
+                        </div>
+                        <div className="flex flex-col text-right">
+                            <span className="text-slate-600">Top 10 持仓</span>
+                            <span className={`text-xs ${Number(token.holdersTop10Percent) > 35 ? 'text-red-400' : 'text-slate-300'}`}>
+                                {token.holdersTop10Percent}%
+                            </span>
+                        </div>
+                    </div>
+
+                    <div className="flex flex-col gap-3">
+                        <div className="flex items-center gap-2 bg-slate-950 rounded-lg p-2 border border-slate-800">
+                            <code className="text-[9px] text-slate-500 truncate flex-1 font-mono">{token.contractAddress}</code>
+                            <button onClick={copyToClipboard} className="p-1.5 hover:bg-slate-800 rounded transition-colors text-slate-500 hover:text-white">
+                                {copied ? <Icon name="check" className="w-4 h-4 text-green-500" /> : <Icon name="copy" className="w-4 h-4" />}
+                            </button>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2">
+                            <a href={binanceSwapUrl} target="_blank" className="flex items-center justify-center gap-2 py-3 rounded-xl bg-red-600 hover:bg-red-500 text-white font-black text-[11px] uppercase transition-all shadow-lg shadow-red-600/10">
+                                <Icon name="rocket" className="w-4 h-4" /> 极速买入
+                            </a>
+                            <a href={binanceChartUrl} target="_blank" className="flex items-center justify-center gap-2 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-black text-[11px] uppercase border border-slate-700 transition-all">
+                                <Icon name="bar-chart-3" className="w-4 h-4" /> 查看K线
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        function App() {
+            const [tokens, setTokens] = useState([]);
+            const [stats, setStats] = useState({ scanned: 0, hits: 0, rugs: 0 });
+            const [activeTab, setActiveTab] = useState('all');
+            const [connected, setConnected] = useState(false);
+
+            const fetchData = async () => {
+                try {
+                    const res = await fetch(`${API_BASE}/api/tokens`);
+                    const data = await res.json();
+                    setTokens(data.tokens || []);
+                    setStats(data.stats || { scanned: 0, hits: 0, rugs: 0 });
+                    setConnected(true);
+                } catch (err) {
+                    setConnected(false);
+                }
+            };
+
+            useEffect(() => {
+                fetchData();
+                const timer = setInterval(fetchData, 3000);
+                return () => clearInterval(timer);
+            }, []);
+
+            const filteredTokens = tokens.filter(t => activeTab === 'all' || t.rating === activeTab);
+
+            return (
+                <div className="min-h-screen p-4 md:p-8 max-w-7xl mx-auto">
+                    {/* Header */}
+                    <header className="flex flex-col md:flex-row justify-between items-center mb-12 gap-6">
+                        <div className="flex items-center gap-4">
+                            <div className="w-14 h-14 bg-blue-600 rounded-2xl flex items-center justify-center shadow-xl shadow-blue-500/20 rotate-3 border border-blue-400/20">
+                                <Icon name="zap" className="text-white w-8 h-8 fill-current" />
+                            </div>
+                            <div>
+                                <h1 className="text-4xl font-black text-white italic tracking-tighter uppercase font-cyber">
+                                    Meme <span className="text-blue-500">Hunter</span> Pro
+                                </h1>
+                                <p className="text-slate-500 text-[10px] font-black tracking-[0.3em] uppercase mt-1">Binance Web3 Elite Infrastructure</p>
+                            </div>
+                        </div>
+
+                        <div className="flex items-center gap-1 bg-slate-900/50 p-1 rounded-2xl border border-slate-800">
+                            {[
+                                { label: '今日扫描', value: stats.scanned, color: 'text-slate-400' },
+                                { label: '发现金狗', value: stats.hits, color: 'text-green-500' },
+                                { label: '拦截 Rug', value: stats.rugs, color: 'text-red-500' }
+                            ].map((item, idx) => (
+                                <div key={idx} className={`px-6 py-2 text-center ${idx < 2 ? 'border-r border-slate-800' : ''}`}>
+                                    <p className="text-[9px] text-slate-500 uppercase font-black mb-1">{item.label}</p>
+                                    <p className={`${item.color} font-black text-xl tabular-nums`}>{item.value}</p>
+                                </div>
+                            ))}
+                        </div>
+                    </header>
+
+                    {/* Filter Bar */}
+                    <div className="flex flex-col md:flex-row justify-between items-center mb-10 gap-4">
+                        <div className="flex gap-1 bg-slate-900/80 p-1 rounded-xl border border-slate-800">
+                            {['all', 'S', 'A', 'B'].map(tab => (
+                                <button
+                                    key={tab}
+                                    onClick={() => setActiveTab(tab)}
+                                    className={`px-8 py-2.5 rounded-lg text-[11px] font-black transition-all uppercase tracking-widest ${activeTab === tab ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'text-slate-500 hover:text-slate-300'}`}
+                                >
+                                    {tab === 'all' ? '全部信号' : `${tab} 级极品`}
+                                </button>
+                            ))}
+                        </div>
+                        <div className="flex items-center gap-3 text-slate-500 text-[10px] font-black uppercase tracking-widest">
+                            <div className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500 shadow-[0_0_8px_#22c55e]' : 'bg-red-500 animate-pulse'}`} />
+                            {connected ? '作战大盘同步中' : '等待 API 响应...'}
+                        </div>
+                    </div>
+
+                    {/* Grid */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                        {filteredTokens.map((token, idx) => (
+                            <TokenCard key={idx} token={token} />
+                        ))}
+                        
+                        {filteredTokens.length === 0 && (
+                            <div className="col-span-full py-40 border-2 border-dashed border-slate-900 rounded-3xl flex flex-col items-center justify-center text-slate-700">
+                                <Icon name="search" className="w-12 h-12 mb-4 opacity-20" />
+                                <p className="font-black uppercase tracking-[0.3em] italic">正在链上雷达实时探测...</p>
+                                <p className="text-[10px] mt-2">已锁定 1001 Pump.fun 核心协议</p>
+                            </div>
+                        )}
+                    </div>
+
+                    <footer className="mt-24 pt-8 border-t border-slate-900 flex flex-col md:flex-row justify-between items-center text-slate-600 text-[10px] font-black uppercase tracking-[0.2em] gap-4">
+                        <div className="flex items-center gap-8">
+                            <span>🛡️ 代码审计: BINANCE TOKEN AUDIT</span>
+                            <span>🧠 社交大脑: GROK-4 X.AI</span>
+                        </div>
+                        <p>© 2026 QUANT ARCHITECT · MEME HUNTER PRO V2.0</p>
+                    </footer>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
