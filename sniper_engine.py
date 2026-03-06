@@ -13,13 +13,23 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 class SniperEngine:
     """
-    核心扫盘引擎 - 全自动狙击作战版 (支持分仓策略)
+    核心扫盘引擎 - 全自动狙击作战版 (支持分仓策略 & 飞书全面同步)
     """
 
     def __init__(self):
         self.chain_id = config.TARGET_CHAIN_ID
         self.seen_tokens = set()
         self.last_hits = []
+
+        # ==========================================
+        # 新增日志：检查自动交易钱包是否跑通
+        # ==========================================
+        if trader.wallet:
+            logging.info(f"✅ 自动交易引擎准备就绪！当前挂载钱包公钥: {trader.wallet.pubkey()}")
+            logging.info(
+                f"🔫 S级全仓购买量: {config.BUY_AMOUNT_SOL} SOL | A级半仓购买量: {config.BUY_AMOUNT_SOL * 0.5} SOL")
+        else:
+            logging.warning("⚠️ 未检测到有效私钥配置！交易引擎当前为【只读监控模式】，将不会执行任何真实买入操作。")
 
     def is_token_physical_quality_fine(self, token: dict, rank_type: int) -> tuple:
         symbol = token.get("symbol", "Unknown")
@@ -102,8 +112,10 @@ class SniperEngine:
                 token_with_context = {**token, "context": context}
                 self.last_hits.append(token_with_context)  # 加入供 API 获取
 
+                # 发送发现信号通知，确保 TG 和飞书都收到
                 tg_bot.format_and_send_alert(token_with_context, grok_analysis)
-                feishu_bot.format_and_send_alert(token_with_context, grok_analysis)
+                if hasattr(feishu_bot, 'format_and_send_alert'):
+                    feishu_bot.format_and_send_alert(token_with_context, grok_analysis)
 
                 # ==========================================
                 # 分仓自动买入触发逻辑
@@ -114,7 +126,6 @@ class SniperEngine:
                     trader.buy_token(token_with_context, amount_multiplier=1.0)
                 elif rating == "A":
                     logging.info(f"👍 A级优质！触发半仓买入策略")
-                    # 只有在你的 trade_engine 支持 amount_multiplier 参数时才有效
                     trader.buy_token(token_with_context, amount_multiplier=0.5)
             else:
                 logging.info(f"🛑 [{rank_name}] 放弃 ${symbol}: Grok 评级 {rating}")
