@@ -1,59 +1,99 @@
 import time
 import threading
 import logging
+import json
+import os
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from config import config
 from sniper_engine import SniperEngine
-from api_server import init_api_server, run_server
-
-# 统一配置全局日志格式
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
 
 
-def main():
-    print("===================================================")
-    print("🚀 Meme Hunter Pro V3 - Solana 极速量化狙击系统启动")
-    print("===================================================")
+# ==========================================
+# 1. 极简日志捕获 (用于网页同步显示)
+# ==========================================
+class MemoryLogHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.logs = []
 
-    try:
-        # 1. 启动前校验核心配置（API Key、私钥等）
-        config.validate()
-    except ValueError as e:
-        print(e)
+    def emit(self, record):
+        self.logs.append(self.format(record))
+        if len(self.logs) > 30: self.logs.pop(0)
+
+
+log_handler = MemoryLogHandler()
+log_handler.setFormatter(logging.Formatter('%H:%M:%S - %(message)s'))
+logging.getLogger().addHandler(log_handler)
+logging.getLogger().setLevel(logging.INFO)
+
+ENGINE_INSTANCE = None
+
+
+# ==========================================
+# 2. 极简 API 服务器 (仅处理状态和日志)
+# ==========================================
+class SimpleHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        # 处理状态请求，解决“离线”显示问题
+        if self.path == '/api/status':
+            self._send_json({"status": "success", "is_active": getattr(ENGINE_INSTANCE, 'is_active', True)})
+
+        # 处理日志请求
+        elif self.path == '/api/logs':
+            self._send_json({"status": "success", "logs": log_handler.logs})
+
+        # 默认返回 index.html 内容
+        else:
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html; charset=utf-8')
+            self.end_headers()
+            if os.path.exists('index.html'):
+                with open('index.html', 'rb') as f:
+                    self.wfile.write(f.read())
+            else:
+                self.wfile.write(b"<h1>Bot is Running</h1><p>index.html not found.</p>")
+
+    def _send_json(self, data):
+        self.send_response(200)
+        self.send_header('Content-type', 'application/json')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode())
+
+    def log_message(self, format, *args):
         return
 
-    # 2. 实例化加权狙击引擎
-    engine = SniperEngine()
 
-    # 3. 初始化并启动后台 API 与 Web 服务 (强制绑定 8000 端口)
-    init_api_server(engine)
-    api_thread = threading.Thread(
-        target=run_server,
-        kwargs={'host': '0.0.0.0', 'port': 8000},
-        daemon=True
-    )
-    api_thread.start()
+def start_server():
+    HTTPServer(('0.0.0.0', 8000), SimpleHandler).serve_forever()
 
-    logging.info(f"✅ 核心引擎初始化完成 | 轮询间隔: {config.SCAN_INTERVAL} 秒 | 优先费: {config.SOL_PRIORITY_FEE} SOL")
-    logging.info("💡 提示: 请在浏览器中打开 http://127.0.0.1:8000 访问作战大盘！")
 
-    # 4. 进入主循环：不间断扫描打狗
+# ==========================================
+# 3. 主程序
+# ==========================================
+def main():
+    global ENGINE_INSTANCE
+    logging.info("🚀 系统初始化中...")
+
+    try:
+        config.validate()
+        ENGINE_INSTANCE = SniperEngine()
+        ENGINE_INSTANCE.is_active = True
+    except Exception as e:
+        logging.error(f"❌ 启动失败: {e}")
+        return
+
+    # 启动 8000 端口监控
+    threading.Thread(target=start_server, daemon=True).start()
+    logging.info("✅ 监控端口 8000 已开启，正在处理 API 请求...")
+
     while True:
         try:
-            # 引擎内部会判断 self.is_active 状态来决定是休息还是扫描
-            engine.run_scan_cycle()
-
-            # 遵守配置文件的扫描间隔
+            if getattr(ENGINE_INSTANCE, 'is_active', True):
+                ENGINE_INSTANCE.run_scan_cycle()
             time.sleep(config.SCAN_INTERVAL)
-
-        except KeyboardInterrupt:
-            print("\n🛑 接收到退出指令，程序安全终止。")
-            break
         except Exception as e:
-            logging.error(f"❌ 主循环发生未捕获异常，将在 {config.SCAN_INTERVAL} 秒后重试: {e}")
+            logging.error(f"⚠️ 扫盘异常: {e}")
             time.sleep(config.SCAN_INTERVAL)
 
 
