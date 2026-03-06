@@ -13,7 +13,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 class SniperEngine:
     """
-    核心扫盘引擎 - 全自动狙击作战版
+    核心扫盘引擎 - 全自动狙击作战版 (支持分仓策略)
     """
 
     def __init__(self):
@@ -106,10 +106,16 @@ class SniperEngine:
                 feishu_bot.format_and_send_alert(token_with_context, grok_analysis)
 
                 # ==========================================
-                # 自动买入触发 (严格限制只买 S 级)
+                # 分仓自动买入触发逻辑
+                # S 级买 100% 设定份额，A 级买 50% 设定份额
                 # ==========================================
                 if rating == "S":
-                    trader.buy_token(token_with_context)
+                    logging.info(f"🔥 S级极品！触发全额买入策略")
+                    trader.buy_token(token_with_context, amount_multiplier=1.0)
+                elif rating == "A":
+                    logging.info(f"👍 A级优质！触发半仓买入策略")
+                    # 只有在你的 trade_engine 支持 amount_multiplier 参数时才有效
+                    trader.buy_token(token_with_context, amount_multiplier=0.5)
             else:
                 logging.info(f"🛑 [{rank_name}] 放弃 ${symbol}: Grok 评级 {rating}")
 
