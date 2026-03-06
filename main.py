@@ -17,12 +17,16 @@ class MemoryLogHandler(logging.Handler):
         self.logs = []
 
     def emit(self, record):
-        self.logs.append(self.format(record))
-        if len(self.logs) > 30: self.logs.pop(0)
+        try:
+            self.logs.append(self.format(record))
+            if len(self.logs) > 30: self.logs.pop(0)
+        except Exception:
+            self.handleError(record)
 
 
 log_handler = MemoryLogHandler()
-log_handler.setFormatter(logging.Formatter('%H:%M:%S - %(message)s'))
+# 修复错误：不能直接写 %H，需要使用 %(asctime)s 并配合 datefmt
+log_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s', datefmt='%H:%M:%S'))
 logging.getLogger().addHandler(log_handler)
 logging.getLogger().setLevel(logging.INFO)
 
@@ -49,7 +53,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
             self.end_headers()
             if os.path.exists('index.html'):
                 with open('index.html', 'rb') as f:
-                    self.wfile.write(f.read())
+                    self.wfile.read(f.read())
             else:
                 self.wfile.write(b"<h1>Bot is Running</h1><p>index.html not found.</p>")
 
