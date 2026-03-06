@@ -2,13 +2,13 @@ import requests
 import uuid
 import logging
 
-# 配置基础的日志输出
+# 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
 class BinanceWeb3API:
     """
-    封装 Binance Web3 相关的 API 接口
+    封装 Binance Web3 相关的 API 接口 - 探测阈值优化版
     """
 
     def __init__(self):
@@ -16,20 +16,35 @@ class BinanceWeb3API:
             "Content-Type": "application/json",
             "Accept-Encoding": "identity"
         }
+        # 核心发射协议
+        self.LAUNCHPAD_PROTOCOLS = {
+            "CT_501": [1001],  # Pump.fun
+            "56": [2001]  # Four.meme
+        }
 
-    def get_finalizing_memes(self, chain_id: str = "CT_501", limit: int = 5) -> list:
+    def get_memes(self, chain_id: str = "CT_501", rank_type: int = 20, limit: int = 15) -> list:
         """
-        获取“真正”即将打满（Finalizing）的 Meme 币列表
+        获取 Meme 币列表 - 优化进度探测逻辑
+        rank_type: 10=New, 20=Finalizing, 30=Migrated
         """
         url = "https://web3.binance.com/bapi/defi/v1/public/wallet-direct/buw/wallet/market/token/pulse/rank/list"
 
+        target_protocols = self.LAUNCHPAD_PROTOCOLS.get(chain_id, [])
+
         payload = {
             "chainId": chain_id,
-            "rankType": 20,  # 20 为 Finalizing 榜单
-            "progressMin": "95",  # 严格筛选：进度从 80% 提高到 95%
+            "rankType": rank_type,
+            "protocol": target_protocols,
             "excludeDevWashTrading": 1,
             "limit": limit
         }
+
+        # 优化点：将 95% 下调至 80%，扩大监控窗口
+        if rank_type == 20:
+            payload["progressMin"] = "80"
+        elif rank_type == 10:
+            # 对于新币，我们也只看已经有一定热度（进度 > 50%）的
+            payload["progressMin"] = "50"
 
         try:
             response = requests.post(url, headers=self.headers, json=payload, timeout=10)
@@ -41,28 +56,28 @@ class BinanceWeb3API:
                 return []
 
             res_content = data.get("data")
+            raw_tokens = []
             if isinstance(res_content, list):
                 raw_tokens = res_content
             elif isinstance(res_content, dict):
                 raw_tokens = res_content.get("tokens", [])
-            else:
-                raw_tokens = []
 
             clean_tokens = []
             for token in raw_tokens:
                 if not isinstance(token, dict):
                     continue
 
-                # 【修复核心】：数据脱水时增加 or 运算符作为空值保护
-                # 如果 API 返回 None，则强制转为安全的基础值
                 clean_tokens.append({
                     "symbol": token.get("symbol") or "Unknown",
-                    "contractAddress": token.get("contractAddress") or "Unknown",
+                    "contractAddress": token.get("contractAddress"),
+                    "chainId": chain_id,  # 显式传递链 ID
                     "progress": token.get("progress") or "0",
                     "marketCap": token.get("marketCap") or "0",
-                    "holdersTop10Percent": token.get("holdersTop10Percent") or "0",
+                    "holdersTop10Percent": token.get("holdersTop10Percent") or "100",
                     "devSellPercent": token.get("devSellPercent") or "0",
-                    "devPosition": token.get("devPosition") or 0
+                    "devMigrateCount": token.get("devMigrateCount") or 0,
+                    "migrateStatus": token.get("migrateStatus") or 0,
+                    "protocol": token.get("protocol")
                 })
 
             return clean_tokens
@@ -73,7 +88,7 @@ class BinanceWeb3API:
 
     def audit_token_security(self, chain_id: str, contract_address: str) -> dict:
         """
-        调用币安底层安全审计接口
+        深度安全审计：基于细节风险项判定
         """
         url = "https://web3.binance.com/bapi/defi/v1/public/wallet-direct/security/token/audit"
         request_id = str(uuid.uuid4())
@@ -92,23 +107,36 @@ class BinanceWeb3API:
             data = response.json()
 
             if not data.get("success"):
-                return {"is_safe": False, "reason": "审计接口异常"}
+                return {"is_safe": False, "reason": "审计接口故障"}
 
             audit_data = data.get("data", {})
-            if not isinstance(audit_data, dict) or not audit_data.get("hasResult"):
-                return {"is_safe": False, "reason": "无审计结果"}
+            if not audit_data.get("hasResult") or not audit_data.get("isSupported"):
+                return {"is_safe": False, "reason": "无审计数据"}
 
+            # 风险等级校验
             risk_level = audit_data.get("riskLevel", 5)
-
-            # 严格风控：只接受风险等级 1 (INFO) 或 2 (LOW)
             if risk_level > 2:
-                return {"is_safe": False, "reason": f"风险偏高 ({audit_data.get('riskLevelEnum')})"}
+                return {"is_safe": False, "reason": f"风险等级过高 ({audit_data.get('riskLevelEnum')})"}
+
+            # 开源校验
+            extra_info = audit_data.get("extraInfo", {})
+            if not extra_info.get("isVerified"):
+                return {"is_safe": False, "reason": "代码未开源"}
+
+            # 深度风险项扫描
+            risk_items = audit_data.get("riskItems", [])
+            for item in risk_items:
+                details = item.get("details", [])
+                for detail in details:
+                    if detail.get("isHit") and detail.get("riskType") == "RISK":
+                        return {"is_safe": False, "reason": f"命中风险: {detail.get('title')}"}
 
             return {"is_safe": True, "reason": "安全"}
 
-        except Exception:
-            return {"is_safe": False, "reason": "请求异常"}
+        except Exception as e:
+            logging.error(f"安全审计异常: {e}")
+            return {"is_safe": False, "reason": "请求失败"}
 
 
-# 实例化提供给其他模块使用
+# 实例化
 binance_api = BinanceWeb3API()

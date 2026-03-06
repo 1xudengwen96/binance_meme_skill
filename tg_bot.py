@@ -9,7 +9,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 class TelegramBot:
     """
     封装 Telegram 机器人相关的推送功能
-    用于将金狗战报发送到你的手机/群组
+    优化排版以支持一键复制，并深度集成币安 Web3 钱包
     """
 
     def __init__(self):
@@ -19,11 +19,10 @@ class TelegramBot:
 
     def send_message(self, text: str) -> bool:
         """
-        发送 Markdown 格式的文本消息到指定的 Telegram Chat
+        发送消息到指定的 Telegram Chat
         """
-        # 如果没有配置 Telegram 参数，则只在控制台打印
         if not self.bot_token or not self.chat_id or self.bot_token.startswith("123456789"):
-            logging.warning("Telegram Bot Token 未正确配置，已转为控制台输出：\n" + text)
+            logging.warning("Telegram Bot 未配置，输出到控制台：\n" + text)
             return False
 
         url = f"{self.base_url}/sendMessage"
@@ -31,7 +30,7 @@ class TelegramBot:
             "chat_id": self.chat_id,
             "text": text,
             "parse_mode": "Markdown",
-            "disable_web_page_preview": True  # 关闭链接自动预览，防止打乱我们精心设计的排版
+            "disable_web_page_preview": False
         }
 
         try:
@@ -44,56 +43,53 @@ class TelegramBot:
 
     def format_and_send_alert(self, token_data: dict, grok_analysis: dict) -> bool:
         """
-        组装精美的金狗警报模板，并触发推送
+        组装金狗战报：支持点击即复制 CA，且按钮直达币安 Web3 钱包
         """
         symbol = token_data.get("symbol", "Unknown")
         ca = token_data.get("contractAddress", "Unknown")
+        chain_id = token_data.get("chainId", "CT_501")  # 默认 Solana
         progress = token_data.get("progress", "Unknown")
 
-        # 将市值格式化，加上逗号使其更易读
+        # 市值美化
         mcap_raw = token_data.get("marketCap", "0")
         try:
-            mcap = f"${float(mcap_raw):,.2f}"
+            mcap = f"${float(mcap_raw):,.0f}"
         except:
             mcap = f"${mcap_raw}"
 
-        holders_top10 = token_data.get("holdersTop10Percent", "Unknown")
-        dev_sell = token_data.get("devSellPercent", "Unknown")
-
         rating = grok_analysis.get("rating", "Unknown")
-        summary = grok_analysis.get("summary", "Grok 无返回摘要。")
+        summary = grok_analysis.get("summary", "无摘要")
 
-        # 根据评级添加不同的高亮 emoji
-        if rating == "S":
-            rating_emoji = "🔥"
-        elif rating == "A":
-            rating_emoji = "⚠️"
-        elif rating == "F":
-            rating_emoji = "❌"
-        else:
-            rating_emoji = "ℹ️"
+        # 针对币安 Web3 钱包的 deeplink 构造
+        # 手机端会自动唤起币安 App
+        binance_swap_url = f"https://www.binance.com/zh-CN/web3wallet/dex/swap?chainId={chain_id}&toTokenAddress={ca}"
+        binance_chart_url = f"https://www.binance.com/zh-CN/web3wallet/dex/chart?chainId={chain_id}&address={ca}"
 
-        # --- 组装 Markdown 消息体 ---
-        msg = f"""🚨 **发现潜在金狗：${symbol}** 🚨
+        # 评级 Emoji
+        rating_emoji = {"S": "🔥", "A": "✅", "B": "👀", "F": "❌"}.get(rating, "ℹ️")
 
-📊 **Binance 链上数据**：
-- **进度**：{progress}% (即将上线外盘) 
-- **市值**：{mcap}
-- **筹码**：前十占比 {holders_top10}% | 开发者卖出 {dev_sell}%
-- **风控**：✅ 审计绝对安全
+        # --- 组装 Markdown ---
+        # 注意：ca 被包裹在单反引号内，手机端点击即可复制
+        msg = f"""🚨 **发现潜在金狗：${symbol}**
 
-🐦 **Grok 流量透视 (X)**：
-{rating_emoji} **{rating}级共振！**
+📊 **链上指标**：
+- 进度：{progress}% (即将打满)
+- 市值：{mcap}
+- 审计：✅ 已通过币安深度安全审计
+
+🐦 **Grok 社交透视 [{rating_emoji} {rating}级]**：
 _{summary}_
 
-⚡ **一键快捷操作**：
-[📈 DexScreener 看K线](https://dexscreener.com/solana/{ca})
-[🚀 Photon 极速买入](https://photon-sol.tinyastro.io/en/lp/{ca})
-`{ca}` (点击自动复制合约)
+🎯 **一键复制合约 (点击下方地址)**：
+`{ca}`
+
+⚡ **快捷操作 (直达币安 App)**：
+[🚀 币安 Web3 极速买入]({binance_swap_url})
+[📈 币安 Web3 查看K线]({binance_chart_url})
 """
-        logging.info(f"正在向 Telegram 推送代币 ${symbol} 的警报...")
+        logging.info(f"推送代币 ${symbol} 至 Telegram...")
         return self.send_message(msg)
 
 
-# 实例化提供给其他模块使用
+# 实例化
 tg_bot = TelegramBot()

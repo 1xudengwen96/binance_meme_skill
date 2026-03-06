@@ -6,60 +6,69 @@ from grok_api import grok_api
 from tg_bot import tg_bot
 from feishu_bot import feishu_bot
 
+# 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
 class SniperEngine:
     """
-    核心扫盘引擎 - 专注于“即将打满”的精选代币
+    核心扫盘引擎 - 严控过滤版
     """
 
     def __init__(self):
         self.chain_id = config.TARGET_CHAIN_ID
         self.seen_tokens = set()
 
-    def is_token_quality_fine(self, token: dict) -> tuple:
+    def is_token_quality_fine(self, token: dict, rank_type: int) -> tuple:
         """
-        [精选层] 在请求 Grok 之前，先通过物理指标过滤，极大地节省 Token
+        [精选层] 物理指标过滤：收紧门槛以节省 Grok 成本并降低风险
         """
         symbol = token.get("symbol", "Unknown")
         progress = float(token.get("progress", 0))
+        protocol = token.get("protocol")
 
-        # 1. 进度过滤：必须达到 95% 以上
-        if progress < 95:
-            return False, f"进度不足 ({progress}%)"
+        # 1. 协议过滤：必须是主流发射平台
+        allowed_protocols = [1001, 2001, 2002]
+        if protocol not in allowed_protocols:
+            return False, f"非主流协议 ({protocol})"
 
-        # 2. 筹码集中度 (Top 10 Holders)
-        # 超过 50% 视为高度控盘（比之前更严格）
+        # 2. 动态进度过滤
+        if rank_type == 10:  # 新币榜
+            if progress < 50:
+                return False, f"新币进度尚浅 ({progress}%)"
+        else:  # 即将打满榜 (rank_type 20)
+            if progress < 80:
+                return False, f"打满榜进度不足 ({progress}%)"
+
+        # 3. 开发者信誉检查 (弹性参考)
+        # 虽然不作为硬性拦截，但记录在日志中供参考
+        dev_migrate_count = int(token.get("devMigrateCount", 0))
+
+        # 4. 筹码集中度检查 (Top 10 Holders) - 恢复严控
+        # 严格限制在 35% 以内，防止低市值下的绝对控盘
         holders_top10 = float(token.get("holdersTop10Percent", 100))
-        if holders_top10 > 50:
-            return False, f"筹码过于集中 ({holders_top10}%)"
+        if holders_top10 > 35:
+            return False, f"筹码过分集中 ({holders_top10}%)"
 
-        # 3. 开发者行为
-        # 开发者卖了超过 20% 就跳过
+        # 5. 开发者仓位检查
         dev_sell = float(token.get("devSellPercent", 0))
-        if dev_sell > 20:
-            return False, f"开发者已跑路/抛售 ({dev_sell}%)"
+        if dev_sell > 30:
+            return False, f"开发者已大规模跑路 ({dev_sell}%)"
 
-        # 4. 市值过滤
+        # 6. 市值过滤 - 恢复门槛
+        # 只有市值达到 $20,000 以上才认为具备初步分析价值
         mcap = float(token.get("marketCap", 0))
         if mcap < 20000:
-            return False, f"市值太小 (${mcap:.0f})"
+            return False, f"市值过低 (${mcap:.0f})，不值得分析"
 
-        return True, "优质精选目标"
+        return True, "物理指标优秀，准许进入 Grok 分析"
 
-    def run_scan_cycle(self):
+    def process_token_list(self, tokens: list, rank_type: int, rank_name: str):
         """
-        执行一次完整的扫盘周期
+        处理特定榜单的代币逻辑
         """
-        logging.info("=" * 40)
-        logging.info("开始执行新一轮【即将打满】金狗扫盘...")
-
-        # 1. 抓取即将打满的榜单
-        tokens = binance_api.get_finalizing_memes(chain_id=self.chain_id, limit=10)
-
         if not tokens:
-            logging.info("当前没有符合打满条件的代币。")
+            logging.info(f"[{rank_name}] 当前无符合条件的代币。")
             return
 
         for token in tokens:
@@ -69,41 +78,52 @@ class SniperEngine:
             if not ca or ca in self.seen_tokens:
                 continue
 
-            # 2. 物理指标初筛 (无需花费 Token)
-            is_fine, reason = self.is_token_quality_fine(token)
+            # 1. 指标初筛
+            is_fine, reason = self.is_token_quality_fine(token, rank_type)
             if not is_fine:
-                logging.info(f"⏩ 跳过 ${symbol}: {reason}")
-                # 注意：即便没过初筛，也记录 CA 防止重复扫描同一个垃圾币
+                logging.info(f"⏩ [{rank_name}] 跳过 ${symbol}: {reason}")
                 self.seen_tokens.add(ca)
                 continue
 
-            # 3. 安全审计
+            # 2. 安全审计
             audit_result = binance_api.audit_token_security(self.chain_id, ca)
             if not audit_result.get("is_safe"):
-                logging.warning(f"❌ 剔除 ${symbol}: {audit_result.get('reason')}")
+                logging.warning(f"❌ [{rank_name}] 安全拦截 ${symbol}: {audit_result.get('reason')}")
                 self.seen_tokens.add(ca)
                 continue
 
-            logging.info(
-                f"💎 发现优质精选 ${symbol}，进度 {token.get('progress')}%。请求 Grok-4 进行最后的社交背书分析...")
+            logging.info(f"💎 [{rank_name}] 发现潜力目标 ${symbol} (进度 {token.get('progress')}%). 请求 Grok-4 分析...")
 
-            # 4. Grok 流量透视
+            # 3. Grok 分析与推送
             self.seen_tokens.add(ca)
             grok_analysis = grok_api.analyze_token_traffic(token)
             rating = grok_analysis.get("rating", "F")
 
-            # 5. 最终推送
             if rating in ["S", "A"]:
-                logging.info(f"🚀 确认金狗 ${symbol} (评级 {rating})，发送推送！")
+                logging.info(f"🚀 [{rank_name}] 锁定金狗 ${symbol} (评级 {rating})，发送推送！")
                 tg_bot.format_and_send_alert(token, grok_analysis)
                 feishu_bot.format_and_send_alert(token, grok_analysis)
             else:
-                logging.info(f"🛑 放弃 ${symbol}: Grok 评级 {rating}")
+                logging.info(f"🛑 [{rank_name}] 放弃 ${symbol}: Grok 评级 {rating}")
 
-            time.sleep(2)
+            time.sleep(1)
 
-        logging.info("扫盘周期结束。")
-        logging.info("=" * 40)
+    def run_scan_cycle(self):
+        """
+        执行一次完整的扫盘周期
+        """
+        logging.info("=" * 45)
+
+        logging.info(f"轨道 A: 轮询 {self.chain_id} 【即将打满】名单...")
+        finalizing_tokens = binance_api.get_memes(chain_id=self.chain_id, rank_type=20)
+        self.process_token_list(finalizing_tokens, 20, "打满榜")
+
+        logging.info(f"轨道 B: 轮询 {self.chain_id} 【高热新币】名单...")
+        new_tokens = binance_api.get_memes(chain_id=self.chain_id, rank_type=10)
+        self.process_token_list(new_tokens, 10, "新币榜")
+
+        logging.info("本轮双轨扫盘周期结束。")
+        logging.info("=" * 45)
 
 
 engine = SniperEngine()
