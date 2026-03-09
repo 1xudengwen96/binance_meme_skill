@@ -4,7 +4,6 @@ from collections import deque
 from flask import Flask, request, jsonify, send_from_directory
 from config import config
 
-
 class MemoryLogHandler(logging.Handler):
     def __init__(self, capacity=200):
         super().__init__()
@@ -16,7 +15,6 @@ class MemoryLogHandler(logging.Handler):
     def get_logs(self):
         return list(self.logs)
 
-
 memory_handler = MemoryLogHandler()
 formatter = logging.Formatter('[%(asctime)s] %(message)s', datefmt='%H:%M:%S')
 memory_handler.setFormatter(formatter)
@@ -26,16 +24,31 @@ logging.getLogger().setLevel(logging.INFO)
 app = Flask(__name__, static_folder='.')
 _engine_instance = None
 
-
 def init_api_server(engine):
     global _engine_instance
     _engine_instance = engine
 
+# ==========================================
+# 🛡️ 新增: CORS 跨域问题解决模块
+# ==========================================
+@app.before_request
+def handle_options():
+    """处理浏览器发来的 OPTIONS 预检请求"""
+    if request.method == 'OPTIONS':
+        return '', 204
+
+@app.after_request
+def add_cors_headers(response):
+    """全局注入允许跨域的 Header"""
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    return response
+# ==========================================
 
 @app.route('/')
 def index():
     return send_from_directory('.', 'index.html')
-
 
 @app.route('/api/toggle_engine', methods=['POST'])
 def toggle_engine():
@@ -45,7 +58,6 @@ def toggle_engine():
     if _engine_instance:
         _engine_instance.set_active_state(state)
     return jsonify({"status": "success", "is_active": state, "message": "指令已同步"})
-
 
 @app.route('/api/update_config', methods=['POST'])
 def update_config():
@@ -62,7 +74,6 @@ def update_config():
         return jsonify({"status": "success", "message": "配置已成功下发生效"})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
-
 
 @app.route('/api/manual_snipe', methods=['POST'])
 def manual_snipe():
@@ -82,11 +93,9 @@ def manual_snipe():
     else:
         return jsonify({"status": "error", "message": "交易发送失败，请检查控制台日志"})
 
-
 @app.route('/api/status')
 def get_status():
     return jsonify({"status": "success", "is_active": getattr(_engine_instance, 'is_active', False)})
-
 
 @app.route('/api/stats')
 def get_stats():
@@ -95,13 +104,12 @@ def get_stats():
     stats['defended'] = getattr(trade_engine, 'defense_count', 0)
     return jsonify({"status": "success", "stats": stats})
 
-
 @app.route('/api/logs')
 def get_logs():
     return jsonify({"status": "success", "logs": memory_handler.get_logs()})
 
-
 def run_server(host='0.0.0.0', port=8000):
     log = logging.getLogger('werkzeug')
     log.setLevel(logging.ERROR)
-    app.run(host=host, port=port, debug=False)
+    # 添加 use_reloader=False 防止子线程启动冲突
+    app.run(host=host, port=port, debug=False, use_reloader=False)

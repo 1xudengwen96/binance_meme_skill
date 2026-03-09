@@ -309,7 +309,12 @@
     <div id="toastContainer" class="fixed bottom-6 right-6 z-50 flex flex-col gap-2"></div>
 
     <script>
-        const API_BASE = 'http://127.0.0.1:8000';
+        // ===============================================
+        // 🚨 新增：动态匹配环境请求 (解决连不上后端的问题)
+        // ===============================================
+        const API_BASE = (window.location.protocol === 'file:') ? 'http://127.0.0.1:8000' : '';
+        // ===============================================
+
         let isEngineActive = false;
         let lastLogContent = "";
         let currentFilter = 'all';
@@ -345,7 +350,7 @@
                         animateValueUpdate('stat-defended', data.stats.defended);
                     }
                 })
-                .catch(err => console.error('获取统计数据失败'));
+                .catch(err => console.error('获取统计数据失败', err));
         }
 
         function animateValueUpdate(id, newValue) {
@@ -425,7 +430,7 @@
                         }
                     }
                 })
-                .catch(err => console.error('获取日志流失败'));
+                .catch(err => console.error('获取日志流失败', err));
         }
 
         function renderLogs(logsArray) {
