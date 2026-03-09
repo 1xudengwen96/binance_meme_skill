@@ -33,6 +33,9 @@ class TradeEngine:
         # 常见代币的 Mint 地址
         self.WSOL = "So11111111111111111111111111111111111111112"
 
+        # [新增] 防守撤退计数器，供前端大盘统计展示
+        self.defense_count = 0
+
     def execute_swap(self, token_address: str, action="buy", amount_sol=None, slippage_bps=None) -> str:
         """
         执行代币兑换 (极速买入/卖出)
@@ -135,6 +138,7 @@ class TradeEngine:
                 logging.warning(f"🚨 [{symbol}] 跌破止损线 ({roi * 100:.1f}%)！极速清仓！")
                 self.execute_swap(token_address, action="sell", slippage_bps=2500)  # 暴跌时滑点开到 25% 强跑
                 self._notify(f"🚨 <b>{symbol} 触发止损</b>\n亏损: {roi * 100:.1f}%\n已自动清仓保命。")
+                self.defense_count += 1
                 break
 
             # 2. 触发翻倍抽本 (零成本月球车)
@@ -144,6 +148,7 @@ class TradeEngine:
                 self.execute_swap(token_address, action="sell", slippage_bps=1500)
                 self._notify(
                     f"🎉 <b>{symbol} 翻倍抽本金成功！</b>\n当前盈利: {roi * 100:.1f}%\n已收回 {entry_sol} SOL，剩余利润格局到月球 🌕！")
+                self.defense_count += 1
                 break
 
     def _get_token_price(self, token_address: str) -> float:

@@ -18,13 +18,20 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 class SniperEngine:
     """
     加权评分制 Meme 狙击引擎 (猎人实战进化版)
-    解锁官方潜力榜、放宽物理拦截、修复 Grok 冷启动误判、加入跨链硬隔离
+    解锁官方潜力榜、放宽物理拦截、修复 Grok 冷启动误判、加入跨链硬隔离、支持大盘实时统计
     """
 
     def __init__(self):
         self.chain_id = config.TARGET_CHAIN_ID
         self.seen_tokens = set()
         self.is_active = True  # 控制引擎是否处于工作状态的开关
+
+        # [新增] 全局统计看板数据
+        self.stats = {
+            "total_scanned": 0,
+            "ai_blocked": 0,
+            "success_sniped": 0
+        }
 
     def set_active_state(self, state: bool):
         """供外部(如 API 接口/前端)调用的启停控制方法"""
@@ -154,14 +161,16 @@ class SniperEngine:
                 if not ca or ca in self.seen_tokens: continue
 
                 # ============== [新增] 严格跨链物理隔离 ==============
-                # 修复：官方榜单 fallback 到 BSC 时，导致 Solana 引擎抓到 0x 资产的问题
                 if self.chain_id == "CT_501" and ca.startswith("0x"):
-                    self.seen_tokens.add(ca) # 标记为已看，避免重复扫描并直接丢弃
+                    self.seen_tokens.add(ca)  # 标记为已看，避免重复扫描并直接丢弃
                     continue
                 if self.chain_id == "56" and not ca.startswith("0x"):
-                    self.seen_tokens.add(ca) # 标记为已看，避免重复扫描并直接丢弃
+                    self.seen_tokens.add(ca)  # 标记为已看，避免重复扫描并直接丢弃
                     continue
                 # ====================================================
+
+                # 记录扫描次数
+                self.stats["total_scanned"] += 1
 
                 token['rank_type_tracked'] = rank_type
                 symbol = token.get("symbol", "Unknown")
@@ -219,6 +228,8 @@ class SniperEngine:
                                                        config.SLIPPAGE_A_GRADE)
                     else:
                         logging.info(f"📉 {symbol} 最终得分不足 ({final_score})，放弃买入")
+                        if rating in ["F", "Neutral"]:
+                            self.stats["ai_blocked"] += 1  # 记录 AI 拦截
 
                 else:
                     logging.info(f"💤 {symbol} 评分({total_score})未达标，无需浪费 AI 算力")
@@ -259,6 +270,9 @@ class SniperEngine:
             success_msg = f"✅ <b>买入成功!</b>\n代币: {symbol}\nTx: <code>{tx_sig}</code>"
             if tg_bot:
                 tg_bot.send_message(success_msg)
+
+            # 记录成功狙击
+            self.stats["success_sniped"] += 1
 
             logging.info(f"🛡️ 为 {symbol} 挂载自动防守雷达 (翻倍抽本/移动止损)...")
             trade_engine.start_monitor_thread(ca, symbol, buy_amount)

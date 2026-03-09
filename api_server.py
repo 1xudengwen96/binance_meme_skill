@@ -5,7 +5,7 @@ from flask import Flask, request, jsonify, send_from_directory
 
 
 # ==========================================
-# 新增：全局内存日志捕获器
+# 全局内存日志捕获器
 # 用于将后端日志同步推送到前端大盘展示
 # ==========================================
 class MemoryLogHandler(logging.Handler):
@@ -88,6 +88,27 @@ def get_status():
     global _engine_instance
     is_active = getattr(_engine_instance, 'is_active', False) if _engine_instance else False
     return jsonify({"status": "success", "is_active": is_active})
+
+
+@app.route('/api/stats', methods=['GET'])
+def get_stats():
+    """获取实时作战数据统计，供前端大盘渲染跳动数字"""
+    global _engine_instance
+    if not _engine_instance:
+        return jsonify({"status": "error", "message": "引擎未初始化"})
+
+    # 延迟引入防守引擎，避免循环依赖问题
+    from trade_engine import trade_engine
+
+    # 获取 Sniper 引擎记录的统计数据，若无则给默认值
+    stats = getattr(_engine_instance, 'stats', {
+        "total_scanned": 0, "ai_blocked": 0, "success_sniped": 0
+    }).copy()
+
+    # 补充拉取交易引擎的止损/抽本记录
+    stats['defended'] = getattr(trade_engine, 'defense_count', 0)
+
+    return jsonify({"status": "success", "stats": stats})
 
 
 @app.route('/api/logs', methods=['GET'])

@@ -1,8 +1,10 @@
 import time
 import logging
 import traceback
+import threading
 from config import config
 from sniper_engine import SniperEngine
+import api_server
 
 # 配置全局日志格式
 logging.basicConfig(
@@ -14,7 +16,7 @@ logging.basicConfig(
 
 def main():
     print("==================================================")
-    print("🐺 Meme Hunter Pro V3 - 猎人实战进化版启动 🐺")
+    print("🐺 Meme Hunter Pro V4 - 云端实战版启动 🐺")
     print("==================================================")
 
     # 1. 启动前核心配置校验
@@ -33,7 +35,17 @@ def main():
     logging.info(f"🛡️ 自动防守策略: 跌20%断臂 / 涨100%抽本")
     logging.info("--------------------------------------------------")
 
-    # 3. 开启猎杀主循环
+    # 3. 初始化并启动 Web API 服务 (在独立后台线程中运行，防止阻塞)
+    try:
+        api_server.init_api_server(engine)
+        # 将 Flask 服务作为守护线程(daemon=True)启动，主程序退出时它会自动安全销毁
+        web_thread = threading.Thread(target=api_server.run_server, kwargs={'host': '0.0.0.0', 'port': 8000}, daemon=True)
+        web_thread.start()
+        logging.info("🌐 云端控制台服务已在后台成功挂载。")
+    except Exception as e:
+        logging.error(f"❌ Web 控制台启动失败: {e}")
+
+    # 4. 开启猎杀主循环 (主线程保持运行)
     while True:
         try:
             start_time = time.time()
@@ -54,7 +66,7 @@ def main():
             logging.error(f"❌ 主循环发生未捕获异常: {e}")
             logging.debug(traceback.format_exc())
             logging.info("🔄 5秒后引擎将自动尝试重启扫描轨道...")
-            time.sleep(5)  # 奔溃退避重试，保证无人值守时机器人的存活
+            time.sleep(5)  # 崩溃退避重试，保证无人值守时机器人的存活
 
 
 if __name__ == "__main__":
