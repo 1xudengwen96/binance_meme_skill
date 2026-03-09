@@ -549,7 +549,24 @@
             };
 
             showToast("正在同步参数至云端节点...", "info");
-            setTimeout(() => { showToast("配置已成功下发！下一轮扫描生效。", "success"); }, 800);
+
+            // 发送到后端 API
+            fetch(API_BASE + '/api/update_config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(configData)
+            })
+            .then(res => res.json())
+            .then(data => {
+                if(data.status === 'success') {
+                    showToast("配置已成功下发！下一轮扫描生效。", "success");
+                } else {
+                    showToast("下发失败: " + data.message, "error");
+                }
+            })
+            .catch(err => {
+                showToast("网络请求出错，请检查服务端", "error");
+            });
         }
 
         function executeManualSnipe() {
@@ -561,13 +578,26 @@
                 return;
             }
 
-            showToast(`已下发指令：强吃 ${ca.substring(0,6)}... 投入 ${amount} SOL`, "info");
-            document.getElementById('manual_ca').value = '';
+            showToast(`正在下发指令：强吃 ${ca.substring(0,6)}...`, "info");
 
-            setTimeout(() => {
-                showToast("⚠️ 手动狙击请求已发送至交易引擎队列。", "warning");
-                switchTab('dashboard'); // 切回大盘看日志
-            }, 1000);
+            fetch(API_BASE + '/api/manual_snipe', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ca: ca, amount: amount })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if(data.status === 'success') {
+                    showToast(data.message, "success");
+                    document.getElementById('manual_ca').value = '';
+                    switchTab('dashboard');
+                } else {
+                    showToast("狙击失败: " + data.message, "error");
+                }
+            })
+            .catch(err => {
+                showToast("网络请求出错，请检查服务端", "error");
+            });
         }
 
         function showToast(message, type = 'info') {
