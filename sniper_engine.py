@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 class SniperEngine:
     """
     加权评分制 Meme 狙击引擎 (猎人实战进化版)
-    解锁官方潜力榜、放宽物理拦截、修复 Grok 冷启动误判
+    解锁官方潜力榜、放宽物理拦截、修复 Grok 冷启动误判、加入跨链硬隔离
     """
 
     def __init__(self):
@@ -152,6 +152,16 @@ class SniperEngine:
             try:
                 ca = token.get("contractAddress")
                 if not ca or ca in self.seen_tokens: continue
+
+                # ============== [新增] 严格跨链物理隔离 ==============
+                # 修复：官方榜单 fallback 到 BSC 时，导致 Solana 引擎抓到 0x 资产的问题
+                if self.chain_id == "CT_501" and ca.startswith("0x"):
+                    self.seen_tokens.add(ca) # 标记为已看，避免重复扫描并直接丢弃
+                    continue
+                if self.chain_id == "56" and not ca.startswith("0x"):
+                    self.seen_tokens.add(ca) # 标记为已看，避免重复扫描并直接丢弃
+                    continue
+                # ====================================================
 
                 token['rank_type_tracked'] = rank_type
                 symbol = token.get("symbol", "Unknown")

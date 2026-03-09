@@ -12,6 +12,8 @@ class Config:
     # ---------------- Grok (xAI) 配置 ----------------
     GROK_API_KEY = os.getenv("GROK_API_KEY")
     GROK_BASE_URL = "https://api.x.ai/v1"
+    # [修复] 提取模型名称到配置，默认使用全账户通用的 grok-beta
+    GROK_MODEL = os.getenv("GROK_MODEL", "grok-beta")
     # 触发 AI 审计的初始分阈值 (建议 55-65)
     GROK_SCORE_THRESHOLD = int(os.getenv("GROK_SCORE_THRESHOLD", 60))
 

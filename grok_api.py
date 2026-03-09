@@ -58,9 +58,9 @@ class GrokAPI:
         示例: {{"rating": "Neutral", "summary": "纯新币，社交媒体暂无讨论，但概念属近期热门的猫系，需观望。"}}
         """
 
-        # 【破案修复】换回你之前能跑通的确切模型名称
+        # 【修复】使用 config.GROK_MODEL 动态指定模型，避免 404 权限报错
         payload = {
-            "model": "grok-2-latest",
+            "model": config.GROK_MODEL,
             "messages": [
                 {"role": "system",
                  "content": "You are a highly analytical AI that outputs ONLY strict JSON formatted data."},
@@ -73,7 +73,7 @@ class GrokAPI:
         retries = 0
         while retries <= max_retries:
             try:
-                logging.info(f"🧠 [Grok] 开始对 {symbol} 进行社交体检 (第 {retries + 1} 次尝试)...")
+                logging.info(f"🧠 [Grok] 开始对 {symbol} 进行社交体检 (使用模型: {config.GROK_MODEL}) (第 {retries + 1} 次尝试)...")
                 response = requests.post(f"{self.base_url}/chat/completions", headers=self.headers, json=payload,
                                          timeout=15)
 
