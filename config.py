@@ -7,7 +7,7 @@ load_dotenv()
 
 class Config:
     """
-    统一管理项目的环境变量与配置参数 - 实战猎人版
+    统一管理项目的环境变量与配置参数 - 猎人进化版
     """
     # ---------------- Grok (xAI) 配置 ----------------
     GROK_API_KEY = os.getenv("GROK_API_KEY")
@@ -23,13 +23,17 @@ class Config:
     FEISHU_WEBHOOK_URL = os.getenv("FEISHU_WEBHOOK_URL")
 
     # ---------------- 引擎运行配置 ----------------
-    # 缩短至 5 秒，毫秒级博弈需更快轮询
-    SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL_SECONDS", 5))
+    # 缩短至 3 秒，毫秒级博弈需更快轮询 (原为5秒)
+    SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL_SECONDS", 3))
     TARGET_CHAIN_ID = os.getenv("TARGET_CHAIN_ID", "CT_501")
 
     # ---------------- 猎人筛选阈值 (实战放宽) ----------------
-    MAX_TOP10_HOLDING = float(os.getenv("MAX_TOP10_HOLDING", 55.0))  # 前十占比上限
-    MIN_MARKET_CAP = float(os.getenv("MIN_MARKET_CAP", 8000.0))  # 最小关注市值
+    # [整改] 放宽前十占比上限，给 Pump.fun 早期项目充分的成长空间
+    MAX_TOP10_HOLDING = float(os.getenv("MAX_TOP10_HOLDING", 75.0))  # 原 55.0
+
+    # [整改] 降低最小关注市值，捕捉 $3k 起步的黄金零头位
+    MIN_MARKET_CAP = float(os.getenv("MIN_MARKET_CAP", 3000.0))  # 原 8000.0
+
     MAX_DEV_SELL = float(os.getenv("MAX_DEV_SELL", 80.0))  # 开发者抛售上限
 
     # ---------------- 自动交易与竞争配置 ----------------
@@ -37,13 +41,13 @@ class Config:
     BUY_AMOUNT_SOL = float(os.getenv("BUY_AMOUNT_SOL", 0.1))
     SOL_RPC_URL = os.getenv("SOL_RPC_URL", "https://api.mainnet-beta.solana.com")
 
-    # [新增] Solana 优先费，确保抢先挤入区块 (单位: SOL)
-    SOL_PRIORITY_FEE = float(os.getenv("SOL_PRIORITY_FEE", 0.002))
+    # [整改] 提高 Solana 默认优先费，防止极端行情被 MEV 夹击阻断 (单位: SOL)
+    SOL_PRIORITY_FEE = float(os.getenv("SOL_PRIORITY_FEE", 0.005))
 
-    # [新增] 动态滑点设置 (BPS: 100 = 1%)
-    SLIPPAGE_S_GRADE = 1200  # S级金狗滑点 12%
-    SLIPPAGE_A_GRADE = 800  # A级优质滑点 8%
-    SLIPPAGE_DEFAULT = 500  # 默认滑点 5%
+    # [整改] 激进滑点设置 (BPS: 100 = 1%) - 买不进比买贵了更痛苦
+    SLIPPAGE_S_GRADE = 2000  # S级金狗滑点 20% (原 12%)
+    SLIPPAGE_A_GRADE = 1500  # A级优质滑点 15% (原 8%)
+    SLIPPAGE_DEFAULT = 1000  # 默认滑点 10% (原 5%)
 
     @classmethod
     def validate(cls):

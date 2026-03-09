@@ -1,11 +1,10 @@
 import time
-import threading
 import logging
+import traceback
 from config import config
 from sniper_engine import SniperEngine
-from api_server import init_api_server, run_server
 
-# 统一配置全局日志格式
+# 配置全局日志格式
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -14,47 +13,48 @@ logging.basicConfig(
 
 
 def main():
-    print("===================================================")
-    print("🚀 Meme Hunter Pro V3 - Solana 极速量化狙击系统启动")
-    print("===================================================")
+    print("==================================================")
+    print("🐺 Meme Hunter Pro V3 - 猎人实战进化版启动 🐺")
+    print("==================================================")
 
+    # 1. 启动前核心配置校验
     try:
-        # 1. 启动前校验核心配置（API Key、私钥等）
         config.validate()
     except ValueError as e:
-        print(e)
+        logging.error(e)
+        logging.error("系统启动中止，请检查 .env 配置。")
         return
 
-    # 2. 实例化加权狙击引擎
+    # 2. 实例化狙击引擎
     engine = SniperEngine()
 
-    # 3. 初始化并启动后台 API 与 Web 服务 (强制绑定 8000 端口)
-    init_api_server(engine)
-    api_thread = threading.Thread(
-        target=run_server,
-        kwargs={'host': '0.0.0.0', 'port': 8000},
-        daemon=True
-    )
-    api_thread.start()
+    logging.info(f"⚙️ 引擎初始化完成 | 目标链: {config.TARGET_CHAIN_ID}")
+    logging.info(f"⏱️ 极速扫描间隔: {config.SCAN_INTERVAL} 秒")
+    logging.info(f"🛡️ 自动防守策略: 跌20%断臂 / 涨100%抽本")
+    logging.info("--------------------------------------------------")
 
-    logging.info(f"✅ 核心引擎初始化完成 | 轮询间隔: {config.SCAN_INTERVAL} 秒 | 优先费: {config.SOL_PRIORITY_FEE} SOL")
-    logging.info("💡 提示: 请在浏览器中打开 http://127.0.0.1:8000 访问作战大盘！")
-
-    # 4. 进入主循环：不间断扫描打狗
+    # 3. 开启猎杀主循环
     while True:
         try:
-            # 引擎内部会判断 self.is_active 状态来决定是休息还是扫描
+            start_time = time.time()
+
+            # 执行一次完整的扫描与狙击周期
             engine.run_scan_cycle()
 
-            # 遵守配置文件的扫描间隔
-            time.sleep(config.SCAN_INTERVAL)
+            # 计算耗时，动态调整休眠时间，确保严格遵守轮询周期
+            elapsed = time.time() - start_time
+            sleep_time = max(0.5, config.SCAN_INTERVAL - elapsed)
+
+            time.sleep(sleep_time)
 
         except KeyboardInterrupt:
-            print("\n🛑 接收到退出指令，程序安全终止。")
+            logging.info("🛑 接收到手动退出信号，猎人引擎安全关闭。")
             break
         except Exception as e:
-            logging.error(f"❌ 主循环发生未捕获异常，将在 {config.SCAN_INTERVAL} 秒后重试: {e}")
-            time.sleep(config.SCAN_INTERVAL)
+            logging.error(f"❌ 主循环发生未捕获异常: {e}")
+            logging.debug(traceback.format_exc())
+            logging.info("🔄 5秒后引擎将自动尝试重启扫描轨道...")
+            time.sleep(5)  # 奔溃退避重试，保证无人值守时机器人的存活
 
 
 if __name__ == "__main__":

@@ -59,6 +59,15 @@ class BinanceAPI:
             return data.get("data")
         return None
 
+    def _safe_get(self, url: str, params: dict = None):
+        """[新增] 基础容错 GET 发送器，用于调用 Exclusive 潜力榜等 GET 接口"""
+        resp = self.session.get(url, params=params, timeout=8)
+        resp.raise_for_status()
+        data = resp.json()
+        if isinstance(data, dict) and str(data.get("code")) in ["000000", "0"]:
+            return data.get("data")
+        return None
+
     @retry_request(max_retries=3)
     def get_memes(self, chain_id="CT_501", rank_type=10):
         """
@@ -78,7 +87,28 @@ class BinanceAPI:
         elif isinstance(data, dict):
             tokens = data.get("tokens") or data.get("list") or data.get("data") or []
 
-        logging.info(f"📡 [API] 从接口拉取到 {len(tokens)} 个代币原始数据 (榜单: {rank_type})")
+        logging.info(f"📡 [API] 从基础大盘拉取到 {len(tokens)} 个代币 (榜单: {rank_type})")
+        return tokens
+
+    @retry_request(max_retries=3)
+    def get_exclusive_memes(self, chain_id="56"):
+        """
+        [新增武器] Skill: crypto-market-rank (Meme Rank 专属潜力榜单)
+        官方路由: /pulse/exclusive/rank/list
+        这是 Binance 官方算法预先打分筛选出的高爆发潜力 Meme 列表
+        """
+        url = "https://web3.binance.com/bapi/defi/v1/public/wallet-direct/buw/wallet/market/token/pulse/exclusive/rank/list"
+        params = {"chainId": chain_id}
+
+        data = self._safe_get(url, params=params)
+
+        tokens = []
+        if isinstance(data, list):
+            tokens = data
+        elif isinstance(data, dict):
+            tokens = data.get("tokens") or data.get("list") or data.get("data") or []
+
+        logging.info(f"🔥 [API] 从官方专属潜力榜拉取到 {len(tokens)} 个高评分代币")
         return tokens
 
     @retry_request(max_retries=3)
@@ -88,7 +118,8 @@ class BinanceAPI:
         官方路由: /social-rush/rank/list
         """
         url = "https://web3.binance.com/bapi/defi/v1/public/wallet-direct/buw/wallet/market/token/social-rush/rank/list"
-        payload = {"chainId": chain_id, "rankType": 10, "limit": 20, "sort": 10}
+        # 猎人实战建议：使用 sort=30 (Viral) 或 sort=20 (Rising)
+        payload = {"chainId": chain_id, "rankType": 30, "limit": 20, "sort": 30}
 
         try:
             data = self._safe_post(url, payload)
@@ -116,25 +147,31 @@ class BinanceAPI:
         Skill: query-token-audit (深度安全审计)
         """
         urls_to_try = [
-            "https://web3.binance.com/bapi/defi/v1/public/wallet-direct/buw/wallet/market/token/security",
-            "https://www.binance.com/bapi/web3/v1/public/web3-skill/query-token-audit",
-            "https://www.binance.com/bapi/web3/v1/public/web3/explorer/token/audit"
+            "https://web3.binance.com/bapi/defi/v1/public/wallet-direct/security/token/audit",
+            "https://web3.binance.com/bapi/defi/v1/public/wallet-direct/buw/wallet/market/token/security"
         ]
-        payload = {"chainId": chain_id, "contractAddress": contract_address}
+        # 注意: 新版安全审计接口需要 requestId
+        import uuid
+        payload = {
+            "binanceChainId": chain_id,
+            "contractAddress": contract_address,
+            "requestId": str(uuid.uuid4())
+        }
         result = {"is_safe": False, "risk_level": 5, "detail": {}}
 
         for url in urls_to_try:
             try:
                 data = self._safe_post(url, payload)
                 if isinstance(data, dict):
-                    result["is_safe"] = data.get("isSafe", False)
-                    result["risk_level"] = data.get("riskLevel", 5)
+                    # 适配新版风险级别 riskLevelEnum (1-5, 1为LOW)
+                    risk_level = data.get("riskLevel", 5)
+                    result["is_safe"] = (risk_level <= 2)  # 1和2算相对安全
+                    result["risk_level"] = risk_level
                     result["detail"] = data
-                    return result  # 成功获取则立即返回
+                    return result
             except Exception:
                 continue
 
-        # 降级静默日志，防止刷屏
         logging.debug(f"审计接口获取异常，默认返回高风险 ({contract_address[:6]}...)")
         return result
 
