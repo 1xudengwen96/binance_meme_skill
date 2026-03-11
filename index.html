@@ -4,8 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Meme Hunter Pro V4 - 云端作战大盘</title>
+    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
     <script>
         tailwind.config = {
@@ -51,23 +54,20 @@
             border-right: 3px solid #00E6A5;
         }
 
-        /* 终端动画 */
-        @keyframes scanline {
-            0% { transform: translateY(-100%); }
-            100% { transform: translateY(100%); }
-        }
-        .terminal-bg { position: relative; overflow: hidden; }
-        .terminal-bg::after {
-            content: ""; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-            background: linear-gradient(to bottom, rgba(0,230,165,0) 0%, rgba(0,230,165,0.05) 50%, rgba(0,230,165,0) 100%);
-            animation: scanline 8s linear infinite; pointer-events: none;
+        /* 终端静态扫描线背景 (移除会导致 DOM 重绘的动画，改用纯静态视觉表现) */
+        .terminal-bg {
+            position: relative;
+            overflow-x: hidden;
+            background-image: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,230,165,0.03) 2px, rgba(0,230,165,0.03) 4px);
         }
     </style>
 </head>
 <body class="flex h-screen overflow-hidden text-sm">
 
+    <!-- 左侧导航栏 -->
     <aside class="w-20 md:w-64 glass-panel border-r border-cyber-border flex flex-col justify-between transition-all duration-300 z-20">
         <div>
+            <!-- Logo -->
             <div class="h-20 flex items-center justify-center md:justify-start md:px-6 border-b border-cyber-border">
                 <i class="fa-solid fa-crosshairs text-cyber-accent text-3xl"></i>
                 <div class="hidden md:block ml-3">
@@ -76,6 +76,7 @@
                 </div>
             </div>
 
+            <!-- 导航菜单 -->
             <nav class="mt-6 flex flex-col gap-2 px-2">
                 <button onclick="switchTab('dashboard')" id="nav-dashboard" class="nav-item active flex items-center p-3 rounded-lg transition-colors hover:bg-slate-800 text-slate-400">
                     <i class="fa-solid fa-radar w-6 text-center text-lg"></i>
@@ -88,6 +89,7 @@
             </nav>
         </div>
 
+        <!-- 底部状态面板 -->
         <div class="p-4 border-t border-cyber-border bg-black/20">
             <div class="flex items-center justify-center md:justify-start gap-3">
                 <div class="relative">
@@ -101,8 +103,10 @@
         </div>
     </aside>
 
+    <!-- 右侧主内容区 -->
     <main class="flex-1 flex flex-col h-full bg-cyber-bg relative overflow-y-auto">
 
+        <!-- 顶栏 -->
         <header class="h-20 glass-panel border-b border-cyber-border flex items-center justify-between px-6 sticky top-0 z-10">
             <h2 id="pageTitle" class="text-xl font-bold text-white flex items-center gap-2">
                 <i class="fa-solid fa-radar text-cyber-accent"></i> 实时作战雷达
@@ -121,7 +125,9 @@
             </div>
         </header>
 
+        <!-- ==================== 标签页 1: 作战雷达 ==================== -->
         <div id="tab-dashboard" class="p-6 flex-1 flex flex-col gap-6 tab-content">
+            <!-- 动态真实数据看板 -->
             <div class="grid grid-cols-2 md:grid-cols-4 gap-4 flex-shrink-0">
                 <div class="glass-panel p-4 rounded-xl flex items-center gap-4">
                     <div class="w-12 h-12 rounded-full bg-blue-500/10 flex items-center justify-center text-blue-400 text-xl border border-blue-500/20">
@@ -161,13 +167,14 @@
                 </div>
             </div>
 
+            <!-- 终端日志区域 -->
             <div class="flex-1 glass-panel rounded-xl border border-cyber-border flex flex-col min-h-[400px]">
                 <div class="h-12 border-b border-cyber-border bg-black/30 flex justify-between items-center px-4">
                     <div class="flex items-center gap-2">
                         <div class="w-3 h-3 rounded-full bg-red-500"></div>
                         <div class="w-3 h-3 rounded-full bg-yellow-500"></div>
                         <div class="w-3 h-3 rounded-full bg-green-500"></div>
-                        <span class="ml-4 font-mono text-xs text-slate-400">root@meme-hunter:~# tail -n 100 -f /var/log/sniper.log</span>
+                        <span class="ml-4 font-mono text-xs text-slate-400">root@meme-hunter:~# tail -f /var/log/sniper.log</span>
                     </div>
                     <div class="flex gap-2 text-xs">
                         <button onclick="setLogFilter('all')" id="filter-all" class="px-2 py-1 rounded bg-slate-700 text-white">全部</button>
@@ -180,11 +187,12 @@
                     </div>
                 </div>
                 <div id="logTerminal" class="flex-1 bg-black/90 p-4 overflow-y-auto font-mono text-[13px] leading-relaxed terminal-bg">
-                    <div class="text-slate-500">等待引擎日志输入流...</div>
+                    <div id="waitingMsg" class="text-slate-500 italic">等待引擎日志输入流...</div>
                 </div>
             </div>
         </div>
 
+        <!-- ==================== 标签页 2: 系统配置 ==================== -->
         <div id="tab-config" class="p-6 flex-1 hidden tab-content overflow-y-auto">
             <div class="max-w-4xl mx-auto space-y-6">
                 <div class="bg-blue-500/10 border border-blue-500/30 p-4 rounded-xl flex items-start gap-3">
@@ -246,16 +254,19 @@
 
     </main>
 
+    <!-- Toast 通知系统 -->
     <div id="toastContainer" class="fixed bottom-6 right-6 z-50 flex flex-col gap-2"></div>
 
     <script>
         const API_BASE = (window.location.protocol === 'file:') ? 'http://127.0.0.1:8000' : '';
 
         let isEngineActive = false;
-        let lastLogContent = "";
+
+        // 【核心优化】日志增量追踪系统
+        let currentLastId = -1;
+        let localLogsBuffer = []; // 本地储存一份，用于本地秒切 Filter 无需请求服务器
         let currentFilter = 'all';
 
-        // DOM 元素引用
         const btn = document.getElementById('engineToggleBtn');
         const btnIcon = document.getElementById('btnIcon');
         const btnText = document.getElementById('btnText');
@@ -267,8 +278,9 @@
             fetchEngineStatus();
             fetchLogs();
             fetchStats();
-            // 定时轮询真实数据
-            setInterval(fetchLogs, 2000);
+
+            // 提高轮询频率至 1 秒，增强真实性和实时感
+            setInterval(fetchLogs, 1000);
             setInterval(fetchStats, 5000);
             setInterval(fetchEngineStatus, 5000);
         });
@@ -321,7 +333,7 @@
             document.getElementById('pageTitle').innerHTML = titles[tabId];
         }
 
-        // ==================== 日志与状态系统 ====================
+        // ==================== 高性能增量日志系统 ====================
         function setLogFilter(filterType) {
             currentFilter = filterType;
             ['all', 'success', 'ai', 'error'].forEach(type => {
@@ -336,37 +348,41 @@
                     btn.classList.add('text-slate-400');
                 }
             });
-            lastLogContent = "";
-            fetchLogs();
+
+            // 切换过滤器时，清空面板，从本地缓存全量重绘一次
+            logTerminal.innerHTML = '';
+            appendNewLogsToDOM(localLogsBuffer);
         }
 
         function fetchLogs() {
-            fetch(API_BASE + '/api/logs')
+            // 每次请求只拉取比 currentLastId 更新的日志
+            fetch(API_BASE + `/api/logs?last_id=${currentLastId}`)
                 .then(res => res.json())
                 .then(data => {
-                    if(data.status === 'success' && data.logs) {
-                        const newLogContent = data.logs.join('\n');
-                        if (newLogContent !== lastLogContent) {
-                            renderLogs(data.logs);
-                            lastLogContent = newLogContent;
+                    if(data.status === 'success' && data.logs && data.logs.length > 0) {
+                        // 更新最新追踪 ID
+                        currentLastId = data.logs[data.logs.length - 1].id;
 
-                            if(document.getElementById('autoScrollCheck').checked) {
-                                logTerminal.scrollTop = logTerminal.scrollHeight;
-                            }
+                        // 存入本地缓存，保证本地保留最多 500 条用于过滤切换
+                        localLogsBuffer = localLogsBuffer.concat(data.logs);
+                        if (localLogsBuffer.length > 500) {
+                            localLogsBuffer = localLogsBuffer.slice(-500);
                         }
+
+                        // 将新日志追加到 DOM
+                        appendNewLogsToDOM(data.logs);
                     }
                 })
                 .catch(err => console.error('获取日志流失败', err));
         }
 
-        function renderLogs(logsArray) {
-            let html = '';
+        function appendNewLogsToDOM(newLogs) {
+            let htmlToAppend = '';
+            let addedCount = 0;
 
-            // 核心修复：只显示最新的 100 条日志，避免过长
-            const maxDisplayLogs = 100;
-            const recentLogs = logsArray.slice(-maxDisplayLogs);
+            newLogs.forEach(logObj => {
+                const log = logObj.text;
 
-            recentLogs.forEach(log => {
                 const isError = log.includes('ERROR') || log.includes('❌') || log.includes('🚨') || log.includes('🚫');
                 const isSuccess = log.includes('✅') || log.includes('🚀') || log.includes('🔥') || log.includes('🎉');
                 const isAI = log.includes('🧠') || log.includes('Grok') || log.includes('🏁');
@@ -390,12 +406,30 @@
                     cssClass = "text-cyan-400";
                 }
 
-                // 核心修复：移除了会造成全局闪烁重绘的 log-enter CSS class 动画
-                html += `<div class="py-0.5 ${cssClass} break-words whitespace-pre-wrap">${prefix}${log}</div>`;
+                htmlToAppend += `<div class="py-0.5 ${cssClass} break-words whitespace-pre-wrap">${prefix}${log}</div>`;
+                addedCount++;
             });
-            logTerminal.innerHTML = html || '<div class="text-slate-600 italic">当前过滤器下暂无日志...</div>';
+
+            if (addedCount > 0) {
+                const waitingMsg = document.getElementById('waitingMsg');
+                if (waitingMsg) waitingMsg.remove();
+
+                // 核心修复：直接使用 insertAdjacentHTML 进行节点追加，不破坏原有 DOM，不再有任何闪烁
+                logTerminal.insertAdjacentHTML('beforeend', htmlToAppend);
+
+                // 性能保护：防止浏览器卡死，DOM 节点维持在最大 150 个，老的像队列一样剔除掉
+                while (logTerminal.children.length > 150) {
+                    logTerminal.removeChild(logTerminal.firstChild);
+                }
+
+                // 自动滚动到最底部
+                if(document.getElementById('autoScrollCheck').checked) {
+                    logTerminal.scrollTop = logTerminal.scrollHeight;
+                }
+            }
         }
 
+        // ==================== 引擎状态控制 ====================
         function fetchEngineStatus() {
             fetch(API_BASE + '/api/status')
                 .then(res => res.json())

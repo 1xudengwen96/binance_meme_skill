@@ -5,15 +5,21 @@ from flask import Flask, request, jsonify, send_from_directory
 from config import config
 
 class MemoryLogHandler(logging.Handler):
-    def __init__(self, capacity=200):
+    def __init__(self, capacity=500): # 增加后台日志缓存容量到500条
         super().__init__()
         self.logs = deque(maxlen=capacity)
+        self.counter = 0 # 全局日志自增ID
 
     def emit(self, record):
-        self.logs.append(self.format(record))
+        # 存入字典，携带唯一递增 ID
+        self.logs.append({"id": self.counter, "text": self.format(record)})
+        self.counter += 1
 
-    def get_logs(self):
-        return list(self.logs)
+    def get_logs(self, last_id=-1):
+        # 如果是初次请求，返回全部缓存；否则只返回比 last_id 更大的新日志（增量推送）
+        if last_id == -1:
+            return list(self.logs)
+        return [log for log in self.logs if log["id"] > last_id]
 
 memory_handler = MemoryLogHandler()
 formatter = logging.Formatter('[%(asctime)s] %(message)s', datefmt='%H:%M:%S')
@@ -29,7 +35,7 @@ def init_api_server(engine):
     _engine_instance = engine
 
 # ==========================================
-# 🛡️ 新增: CORS 跨域问题解决模块
+# 🛡️ CORS 跨域问题解决模块
 # ==========================================
 @app.before_request
 def handle_options():
@@ -88,10 +94,12 @@ def get_stats():
 
 @app.route('/api/logs')
 def get_logs():
-    return jsonify({"status": "success", "logs": memory_handler.get_logs()})
+    # 接收前端传来的 last_id
+    last_id = int(request.args.get('last_id', -1))
+    logs = memory_handler.get_logs(last_id)
+    return jsonify({"status": "success", "logs": logs})
 
 def run_server(host='0.0.0.0', port=8000):
     log = logging.getLogger('werkzeug')
     log.setLevel(logging.ERROR)
-    # 添加 use_reloader=False 防止子线程启动冲突
     app.run(host=host, port=port, debug=False, use_reloader=False)
