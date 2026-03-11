@@ -190,6 +190,11 @@ class SniperEngine:
 
                 if total_score >= config.GROK_SCORE_THRESHOLD:
                     logging.info(f"🧠 {symbol} 达标({total_score}>={config.GROK_SCORE_THRESHOLD})，呼叫 Grok 分析...")
+
+                    # 👇 核心补丁：将市值与聪明钱数据注入 token 对象中，传给 Grok 进行数据维度分析
+                    token['smart_money_count'] = smart_money.get("smartMoneyCount", 0)
+                    token['smart_money_inflow'] = smart_money.get("smartMoneyInflow", 0.0)
+
                     grok_result = grok_api.analyze_meme_potential(token)
                     rating = grok_result.get("rating", "Neutral")
                     summary = grok_result.get("summary", "无")
@@ -205,7 +210,6 @@ class SniperEngine:
                     elif rating == "F":
                         final_score -= 50
 
-                    # 核心修复：直接在终端日志里输出 Grok 的完整文字摘要
                     logging.info(f"🏁 {symbol} 最终得分: {final_score} (含Grok) | 评级: {rating} | 摘要: {summary}")
 
                     # 🚨 核心修改：提高买入门槛，拒绝瞎买“三无”新币

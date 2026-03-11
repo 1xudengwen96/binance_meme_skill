@@ -10,7 +10,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 class GrokAPI:
     """
     对接 xAI Grok 的接口，专职负责 Meme 币的社交潜力与病毒式传播分析
-    猎人实战版：修复“冷启动”误杀问题，拥抱零社交数据的新生头矿
+    猎人实战版 V4：引入多维 Degen 审美（Ticker浓度、PvP防身、聪明钱与市值上下文感知）
     """
 
     def __init__(self):
@@ -34,34 +34,43 @@ class GrokAPI:
         ca = token.get('contractAddress', 'Unknown')
         progress = token.get('progress', 0)
 
-        # [核心优化] 调整 Prompt 逻辑，强制保护 0 社交数据的纯新币
+        # 获取由主引擎注入的上下文数据
+        mcap = token.get('marketCap', 0)
+        sm_count = token.get('smart_money_count', 0)
+        sm_inflow = token.get('smart_money_inflow', 0.0)
+
+        # [核心优化] 顶级猎人 Prompt：加入市值上下文、Ticker 浓度、PvP 防身与突发新闻一票否决/通过
         prompt = f"""
-        你现在是一名顶级的 Web3 Degen 和 Meme 币星探。
+        你现在是一名顶级的 Web3 Degen 和 Meme 币星探，你的嗅觉极其敏锐。
         你的任务是分析该链上的 Meme 代币：${symbol} 
         合约地址(CA): {ca}
         当前进度: {progress}%
+        当前市值(MCAP): ${mcap}
+        聪明钱雷达: {sm_count} 个聪明钱地址已介入，净流入 ${sm_inflow}
 
         【分析焦点】
-        请忽略常规的合约安全审计。你需要专注于 X (Twitter) 上的社交数据：
-        1. 病毒潜质 (Virality)：该代币的名称、Logo 或概念是否好玩、易于传播、具备做成表情包(Meme)的潜力？
-        2. 真实社区讨论：搜索推特，是否有真实的 Web3 玩家或 KOL 在讨论？还是全是 0 粉丝的机器人(Bot)账号在机械式发推？
-        3. 叙事契合度：它是否属于当前最热的叙事（如：AI 代理、热门动物、名流相关、政治概念等）？
+        请忽略常规的合约安全审计，专注于 X (Twitter) 上的社交数据与纯粹的 Meme 基因：
+        1. 病毒潜质 (Virality)：该代币的概念是否好玩、易于传播、具备做成表情包(Meme)的魔力？
+        2. Ticker 浓度 (Ticker Quality)：代号（${symbol}）是否简洁有力、朗朗上口（如 $POPCAT, $WIF 等经典风格）？
+        3. 真实社区讨论：搜索推特，是否有真实的 Web3 玩家或 KOL 在讨论？还是全是 0 粉丝的 Bot 账号在刷屏？结合当前市值 ${mcap} 评估，如果极低市值却有异常高频的讨论，需警惕刷量。
+        4. PvP 与仿盘判定 (Copycat Check)：它是否是已经烂大街的“第 N 个某某龙”或“第 N 个马斯克宠物”？如果是劣质的蹭热度仿盘，必须严厉降级！
 
         【评级标准 - 极度重要】
-        - S级 (全仓抢入)：有知名 KOL 讨论，社区有自发的二创图片/视频，叙事顶级且新颖。
-        - A级 (半仓尝试)：有一定热度，概念不错，但社区文化还在初期酝酿中。
-        - Neutral级 (中立观察)：【注意！】由于是刚发射的新币，X (Twitter) 上暂时搜索不到太多有效信息，这是完全正常的现象！只要概念你不反感，没有明显的劣质仿盘特征，请务必给它 Neutral 评级，给它发育的时间！
-        - F级 (放弃)：能搜到大量内容但全是僵尸号在刷屏(Rug前兆)，或者名字完全是对知名项目的劣质拼凑和拙劣模仿。
+        - S级 (全仓抢入)：必须满足 Ticker 优质且概念新颖，同时有知名 KOL 讨论或社区有自发二创。⚠️【特权规则】：如果 ${symbol} 精准命中了最近 24 小时内的突发大新闻（如马斯克新推文、重大政治/科技事件），且 Ticker 具有唯一性，请无视社交粉丝量，直接提升至 S 级！配合聪明钱底仓，这是绝佳胜率。
+        - A级 (半仓尝试)：有一定热度，概念不错，非明显劣质仿盘，且有部分聪明钱 ({sm_count}人) 在建仓，社区文化在初期酝酿中。
+        - Neutral级 (中立观察)：【防误杀保护机制！】如果这是一个市值较低的纯新币，X (Twitter) 上暂时搜不到太多有效信息，这是极其正常的！只要 Ticker 顺口、概念不引起反感、没有明显的烂大街仿盘特征，请务必给它 Neutral 评级，给它发育的时间！
+        - F级 (放弃)：能搜到大量内容但全是僵尸号在机械发推(Rug前兆)；或者名字完全是对知名项目的劣质拼凑和拙劣模仿（明显的烂大街 PvP 盘）。
 
         【必须严格遵守的返回格式】
         你只能返回纯 JSON，不能有任何多余的解释。
-        示例: {{"rating": "Neutral", "summary": "纯新币，社交媒体暂无讨论，但名字概念尚可，给予发育时间。"}}
+        示例: {{"rating": "Neutral", "summary": "纯新币，X上暂无有效讨论，但 Ticker($WUF) 简洁，无劣质仿盘特征，聪明钱已介入，给予发育时间。"}}
         """
 
         payload = {
             "model": config.GROK_MODEL,
             "messages": [
-                {"role": "system", "content": "You are a highly analytical AI that outputs ONLY strict JSON formatted data. Do not use markdown blocks."},
+                {"role": "system",
+                 "content": "You are a highly analytical AI that outputs ONLY strict JSON formatted data. Do not use markdown blocks."},
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.5,
@@ -71,8 +80,10 @@ class GrokAPI:
         retries = 0
         while retries <= max_retries:
             try:
-                logging.info(f"🧠 [Grok] 开始对 {symbol} 进行社交体检 (模型: {config.GROK_MODEL}) (第 {retries + 1} 次尝试)...")
-                response = requests.post(f"{self.base_url}/chat/completions", headers=self.headers, json=payload, timeout=15)
+                logging.info(
+                    f"🧠 [Grok] 开始对 {symbol} 进行社交体检 (模型: {config.GROK_MODEL}) (第 {retries + 1} 次尝试)...")
+                response = requests.post(f"{self.base_url}/chat/completions", headers=self.headers, json=payload,
+                                         timeout=15)
 
                 if response.status_code != 200:
                     logging.warning(f"⚠️ [Grok] 服务器驳回请求: HTTP {response.status_code} | 详情: {response.text}")
