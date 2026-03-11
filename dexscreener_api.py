@@ -59,9 +59,9 @@ class DexScreenerAPI:
                 if not ca.endswith('pump'):
                     continue
 
-                # 防御 2：流动性护城河 (池子太浅容易被大单砸穿，硬性要求 > 2万美金)
+                # 防御 2：流动性护城河 (池子太浅容易被大单砸穿，稍微放宽到 1.5w 抓更早期的)
                 liq = pair.get('liquidity', {}).get('usd', 0)
-                if liq < 20000:
+                if liq < 15000:
                     continue
 
                 # 防御 3：交易活跃度 (1小时交易量必须大于 5000 美金，拒绝死水盘)
@@ -79,7 +79,9 @@ class DexScreenerAPI:
                     "progress": 100,  # DexScreener 上的基本都已建池
                     "source": "DexScreener",
                     "price": float(pair.get('priceUsd', 0)),
-                    "rank_type_tracked": 88  # 赋予独立的高阶榜单代号: 88
+                    "rank_type_tracked": 88,  # 赋予独立的高阶榜单代号: 88
+                    # 【核心修复】：显式设置持仓比例为0，防止狙击引擎将其视为100%控盘从而被永远拉黑
+                    "holdersTop10Percent": 0.0
                 }
                 safe_tokens.append(token)
 

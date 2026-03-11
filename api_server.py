@@ -75,24 +75,6 @@ def update_config():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
 
-@app.route('/api/manual_snipe', methods=['POST'])
-def manual_snipe():
-    """接收前端手动强吃买入指令"""
-    from trade_engine import trade_engine
-    data = request.get_json()
-    ca = data.get('ca')
-    amount = float(data.get('amount', 0.1))
-
-    logging.info(f"⚡ [前端指令] 正在强行狙击合约: {ca}")
-    tx = trade_engine.execute_swap(ca, action="buy", amount_sol=amount, slippage_bps=2000)
-
-    if tx and not tx.startswith("sim_tx"):
-        return jsonify({"status": "success", "message": f"买入指令已上链: {tx[:10]}..."})
-    elif tx and tx.startswith("sim_tx"):
-        return jsonify({"status": "success", "message": f"模拟买入成功 (未配置私钥): {tx}"})
-    else:
-        return jsonify({"status": "error", "message": "交易发送失败，请检查控制台日志"})
-
 @app.route('/api/status')
 def get_status():
     return jsonify({"status": "success", "is_active": getattr(_engine_instance, 'is_active', False)})

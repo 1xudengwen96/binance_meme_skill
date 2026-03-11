@@ -34,8 +34,7 @@ class GrokAPI:
         ca = token.get('contractAddress', 'Unknown')
         progress = token.get('progress', 0)
 
-        # [整改] 核心 Prompt 优化：解决纯新币无数据被误判为垃圾币(F)的问题
-        # [修复] 移除硬编码的 Solana/BSC，改为通用的“该链上”，避免 AI 产生跨链幻觉
+        # [核心优化] 调整 Prompt 逻辑，强制保护 0 社交数据的纯新币
         prompt = f"""
         你现在是一名顶级的 Web3 Degen 和 Meme 币星探。
         你的任务是分析该链上的 Meme 代币：${symbol} 
@@ -43,27 +42,26 @@ class GrokAPI:
         当前进度: {progress}%
 
         【分析焦点】
-        请忽略常规的合约安全审计（这部分已有其他系统完成）。你需要专注于 X (Twitter) 上的社交数据：
+        请忽略常规的合约安全审计。你需要专注于 X (Twitter) 上的社交数据：
         1. 病毒潜质 (Virality)：该代币的名称、Logo 或概念是否好玩、易于传播、具备做成表情包(Meme)的潜力？
         2. 真实社区讨论：搜索推特，是否有真实的 Web3 玩家或 KOL 在讨论？还是全是 0 粉丝的机器人(Bot)账号在机械式发推？
-        3. 叙事契合度：它是否属于当前最热的叙事（如：AI 代理、热门动物、名流相关）？
+        3. 叙事契合度：它是否属于当前最热的叙事（如：AI 代理、热门动物、名流相关、政治概念等）？
 
         【评级标准 - 极度重要】
         - S级 (全仓抢入)：有知名 KOL 讨论，社区有自发的二创图片/视频，叙事顶级且新颖。
         - A级 (半仓尝试)：有一定热度，概念不错，但社区文化还在初期酝酿中。
-        - Neutral级 (中立观察)：由于是刚发射的新币，X (Twitter) 上暂时搜索不到太多有效信息，但这很正常，概念不反感即可。
-        - F级 (放弃)：能搜到大量内容，但全是僵尸号/机器人在刷屏(Rug前兆)，或者名字完全是对知名项目的拙劣模仿(貔貅盘特征)。
+        - Neutral级 (中立观察)：【注意！】由于是刚发射的新币，X (Twitter) 上暂时搜索不到太多有效信息，这是完全正常的现象！只要概念你不反感，没有明显的劣质仿盘特征，请务必给它 Neutral 评级，给它发育的时间！
+        - F级 (放弃)：能搜到大量内容但全是僵尸号在刷屏(Rug前兆)，或者名字完全是对知名项目的劣质拼凑和拙劣模仿。
 
         【必须严格遵守的返回格式】
-        示例: {{"rating": "Neutral", "summary": "纯新币，社交媒体暂无讨论，但概念属近期热门的猫系，需观望。"}}
+        你只能返回纯 JSON，不能有任何多余的解释。
+        示例: {{"rating": "Neutral", "summary": "纯新币，社交媒体暂无讨论，但名字概念尚可，给予发育时间。"}}
         """
 
-        # 【修复】使用 config.GROK_MODEL 动态指定模型，避免 404 权限报错
         payload = {
             "model": config.GROK_MODEL,
             "messages": [
-                {"role": "system",
-                 "content": "You are a highly analytical AI that outputs ONLY strict JSON formatted data."},
+                {"role": "system", "content": "You are a highly analytical AI that outputs ONLY strict JSON formatted data. Do not use markdown blocks."},
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.5,
@@ -73,11 +71,9 @@ class GrokAPI:
         retries = 0
         while retries <= max_retries:
             try:
-                logging.info(f"🧠 [Grok] 开始对 {symbol} 进行社交体检 (使用模型: {config.GROK_MODEL}) (第 {retries + 1} 次尝试)...")
-                response = requests.post(f"{self.base_url}/chat/completions", headers=self.headers, json=payload,
-                                         timeout=15)
+                logging.info(f"🧠 [Grok] 开始对 {symbol} 进行社交体检 (模型: {config.GROK_MODEL}) (第 {retries + 1} 次尝试)...")
+                response = requests.post(f"{self.base_url}/chat/completions", headers=self.headers, json=payload, timeout=15)
 
-                # 拦截并打印出真实的报错信息
                 if response.status_code != 200:
                     logging.warning(f"⚠️ [Grok] 服务器驳回请求: HTTP {response.status_code} | 详情: {response.text}")
 
@@ -86,9 +82,11 @@ class GrokAPI:
                 result_json = response.json()
                 content = result_json['choices'][0]['message']['content'].strip()
 
-                # 清洗可能带有的 markdown 标记
+                # 增强版：清洗 Markdown 标记，防止 JSON 解析报错
                 if content.startswith("```json"):
                     content = content[7:]
+                if content.startswith("```"):
+                    content = content[3:]
                 if content.endswith("```"):
                     content = content[:-3]
                 content = content.strip()
@@ -112,7 +110,7 @@ class GrokAPI:
             except json.JSONDecodeError as e:
                 logging.error(f"❌ [Grok] 返回格式解析失败，非合法 JSON: {e} | 返回内容: {content}")
                 # 熔断保护时，返回 Neutral 而不是 F
-                return {"rating": "Neutral", "summary": "AI 返回格式异常，进入防误杀保护。"}
+                return {"rating": "Neutral", "summary": "AI 返回格式异常，进入防误杀保护机制。"}
             except Exception as e:
                 logging.error(f"❌ [Grok] 发生未知错误: {e}")
                 # 熔断保护
