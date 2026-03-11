@@ -188,11 +188,8 @@ class SniperEngine:
                     self.seen_tokens.add(ca)  # 重新评估后确认为高危盘，拉黑
                     continue
 
-                # 降低触发 AI 审计的门槛：从 60 分降到 45 分，给早期标的更多机会
-                dynamic_threshold = 45
-
-                if total_score >= dynamic_threshold:
-                    logging.info(f"🧠 {symbol} 达标({total_score}分)，呼叫 Grok 分析...")
+                if total_score >= config.GROK_SCORE_THRESHOLD:
+                    logging.info(f"🧠 {symbol} 达标({total_score}>={config.GROK_SCORE_THRESHOLD})，呼叫 Grok 分析...")
                     grok_result = grok_api.analyze_meme_potential(token)
                     rating = grok_result.get("rating", "Neutral")
                     summary = grok_result.get("summary", "无")
@@ -200,34 +197,31 @@ class SniperEngine:
                     final_score = total_score
 
                     if rating == "S":
-                        final_score += 35
+                        final_score += 40
                     elif rating == "A":
-                        final_score += 15
+                        final_score += 20
                     elif rating == "Neutral":
-                        final_score += 5  # 新币常态，给予微小鼓励分
+                        final_score += 0
                     elif rating == "F":
-                        final_score -= 100
+                        final_score -= 50
 
-                    logging.info(f"🏁 {symbol} 最终得分: {final_score} | 评级: {rating}")
+                    logging.info(f"🏁 {symbol} 最终得分: {final_score} (含Grok) | 评级: {rating}")
 
-                    # 购买最终阈值判断
-                    if final_score >= 80:
-                        self.seen_tokens.add(ca)  # 决定买了就拉黑，防止下一轮重复购买
+                    # 🚨 核心修改：提高买入门槛，拒绝瞎买“三无”新币
+                    if final_score >= 85:  # S级金狗：物理满分 + Grok A以上 / 或庞大聪明钱
                         self._execute_trade_and_notify(token, rating, final_score, summary, score_details,
                                                        config.SLIPPAGE_S_GRADE)
-                    elif final_score >= 65:
-                        self.seen_tokens.add(ca)
+                    elif final_score >= 75:  # A级跟单：物理满分 + 至少有聪明钱/叙事加持
                         token['override_buy_amount'] = config.BUY_AMOUNT_SOL * 0.5
                         self._execute_trade_and_notify(token, rating, final_score, summary, score_details,
                                                        config.SLIPPAGE_A_GRADE)
                     else:
-                        if rating == "F":
-                            self.seen_tokens.add(ca)  # 确认为假盘/垃圾盘，拉黑
-                            self.stats["ai_blocked"] += 1
-                        # 如果不是F，不加入 seen_tokens，留在 watch_list 里等它继续发育
+                        logging.info(f"📉 {symbol} 最终得分不足 ({final_score} < 75)，不值得开仓，放弃买入")
+                        if rating in ["F", "Neutral"]: self.stats["ai_blocked"] += 1
                 else:
-                    logging.debug(f"💤 {symbol} 正在发育中({total_score}分)...")
+                    logging.info(f"💤 {symbol} 评分({total_score})未达标，无需浪费 AI 算力")
 
+                self.seen_tokens.add(ca)
             except Exception as e:
                 logging.error(f"❌ 处理代币 {token.get('symbol')} 时异常: {e}")
                 continue
