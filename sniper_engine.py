@@ -205,7 +205,8 @@ class SniperEngine:
                     elif rating == "F":
                         final_score -= 50
 
-                    logging.info(f"🏁 {symbol} 最终得分: {final_score} (含Grok) | 评级: {rating}")
+                    # 核心修复：直接在终端日志里输出 Grok 的完整文字摘要
+                    logging.info(f"🏁 {symbol} 最终得分: {final_score} (含Grok) | 评级: {rating} | 摘要: {summary}")
 
                     # 🚨 核心修改：提高买入门槛，拒绝瞎买“三无”新币
                     if final_score >= 85:  # S级金狗：物理满分 + Grok A以上 / 或庞大聪明钱

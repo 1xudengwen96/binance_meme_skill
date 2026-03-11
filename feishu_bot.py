@@ -8,7 +8,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 class FeishuBot:
     """
     封装飞书 Webhook 机器人功能
-    升级版：支持叙事与聪明钱情报展示，深度集成币安 Web3 钱包
+    重构版：移除多余的交易跳转，专注专业链上看盘与情报展示，带出完整的AI分析结果
     """
 
     def __init__(self):
@@ -16,7 +16,7 @@ class FeishuBot:
 
     def format_and_send_alert(self, token_data: dict, grok_analysis: dict) -> bool:
         """
-        组装飞书互动卡片：整合叙事、聪明钱情报
+        组装飞书互动卡片：整合叙事、聪明钱情报与极速看盘链接，展示详细Grok摘要
         """
         if not self.webhook_url or "open-apis" not in self.webhook_url:
             logging.warning("飞书 Webhook 未配置，跳过推送。")
@@ -43,9 +43,13 @@ class FeishuBot:
         rating = grok_analysis.get("rating", "Unknown")
         summary = grok_analysis.get("summary", "无分析摘要")
 
-        # 币安 Web3 直达链接
-        binance_swap_url = f"https://www.binance.com/zh-CN/web3wallet/dex/swap?chainId={chain_id}&toTokenAddress={ca}"
-        binance_chart_url = f"https://www.binance.com/zh-CN/web3wallet/dex/chart?chainId={chain_id}&address={ca}"
+        # 动态组装看盘与浏览器地址
+        if chain_id == "CT_501":  # Solana
+            chart_url = f"https://dexscreener.com/solana/{ca}"
+            explorer_url = f"https://solscan.io/token/{ca}"
+        else:  # 默认兼容 BSC 等
+            chart_url = f"https://dexscreener.com/bsc/{ca}"
+            explorer_url = f"https://bscscan.com/token/{ca}"
 
         color_map = {"S": "red", "A": "orange", "B": "blue", "F": "grey"}
         theme_color = color_map.get(rating, "purple")
@@ -78,27 +82,28 @@ class FeishuBot:
                     },
                     {
                         "tag": "div",
+                        # 在这里将 summary 拼接进去展示
                         "text": {"content": f"**🐦 Grok (X) 深度透视 [{rating}级]:**\n{summary}", "tag": "lark_md"}
                     },
                     {"tag": "hr"},
                     {
                         "tag": "div",
-                        "text": {"content": f"**🎯 合约地址 (移动端点击代码块复制):**\n`{ca}`", "tag": "lark_md"}
+                        "text": {"content": f"**🎯 合约地址 (电脑端悬浮复制，手机端点击一键复制):**\n`{ca}`", "tag": "lark_md"}
                     },
                     {
                         "tag": "action",
                         "actions": [
                             {
                                 "tag": "button",
-                                "text": {"content": "🚀 币安 Web3 极速买入", "tag": "plain_text"},
-                                "type": "danger",
-                                "url": binance_swap_url
+                                "text": {"content": "📈 查看 K 线 (DexScreener)", "tag": "plain_text"},
+                                "type": "primary",
+                                "url": chart_url
                             },
                             {
                                 "tag": "button",
-                                "text": {"content": "📈 币安 Web3 查看 K 线", "tag": "plain_text"},
-                                "type": "primary",
-                                "url": binance_chart_url
+                                "text": {"content": "🔍 查看大户 (区块浏览器)", "tag": "plain_text"},
+                                "type": "default",
+                                "url": explorer_url
                             }
                         ]
                     },
