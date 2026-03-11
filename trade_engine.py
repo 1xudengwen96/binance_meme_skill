@@ -3,7 +3,6 @@ import logging
 import threading
 import requests
 import base64
-import base58
 from config import config
 
 # 引入 Solana 核心库 (需确保已安装 solders 和 solana)
@@ -28,15 +27,27 @@ class TradeEngine:
     """
     Solana 极速交易引擎 - 猎人实战版
     集成 Jupiter V6 真实签名上链与自动化防守
+    增强版：自带高可用节点矩阵，免疫 AWS/云端单点 DNS 瘫痪 ([Errno -5])
     """
 
     def __init__(self):
         self.rpc_url = config.SOL_RPC_URL
         self.private_key = config.SOL_PRIVATE_KEY
-        self.jupiter_quote_api = "https://quote-api.jup.ag/v6/quote"
-        self.jupiter_swap_api = "https://quote-api.jup.ag/v6/swap"
+
+        # [核心修复] 建立高可用节点池。即使 AWS 解析不了 quote-api，也能秒切备用节点
+        self.quote_endpoints = [
+            "https://quote-api.jup.ag/v6/quote",
+            "https://api.jup.ag/swap/v1/quote"
+        ]
+        self.swap_endpoints = [
+            "https://quote-api.jup.ag/v6/swap",
+            "https://api.jup.ag/swap/v1/swap"
+        ]
         self.WSOL = "So11111111111111111111111111111111111111112"
         self.defense_count = 0
+
+        # 初始化 Session (底层 TCP 连接复用，比每次 request.get 快 30% 以上)
+        self.session = requests.Session()
 
         # 初始化 Solana 客户端与密钥对
         self.client = Client(self.rpc_url)
@@ -55,37 +66,58 @@ class TradeEngine:
 
     def execute_swap(self, token_address: str, action="buy", amount_sol=None, slippage_bps=None) -> str:
         """
-        执行真实的 Solana Swap 交易
+        执行真实的 Solana Swap 交易 (带高可用节点切换)
         """
         if not self.keypair:
             logging.warning(f"⚠️ [模拟模式] 模拟 {action} {token_address}")
             return f"sim_tx_{int(time.time())}"
 
+        # 1. 设置买卖方向
+        if action == "buy":
+            in_mint, out_mint = self.WSOL, token_address
+            amount = int((amount_sol or config.BUY_AMOUNT_SOL) * 1e9)
+        else:
+            in_mint, out_mint = token_address, self.WSOL
+            amount = int(amount_sol) if amount_sol else 0
+
+        slippage = slippage_bps or config.SLIPPAGE_DEFAULT
+
+        # ==========================================
+        # 2. 🛡️ 节点防瘫痪轮询逻辑获取报价
+        # ==========================================
+        quote_res = None
+        used_index = 0
+
+        for i, quote_api in enumerate(self.quote_endpoints):
+            try:
+                url = f"{quote_api}?inputMint={in_mint}&outputMint={out_mint}&amount={amount}&slippageBps={slippage}"
+                resp = self.session.get(url, timeout=10)
+                resp.raise_for_status()
+                quote_res = resp.json()
+
+                if "error" not in quote_res:
+                    used_index = i
+                    break  # 成功拿到报价，跳出循环
+                else:
+                    logging.warning(f"⚠️ 节点 {quote_api} 返回错误: {quote_res['error']}")
+            except requests.exceptions.ConnectionError as e:
+                # 捕获 Errno -5 DNS 错误，不崩溃，直接尝试下一个节点
+                logging.warning(f"⚠️ 节点 {quote_api} 连接失败(DNS可能被墙)，正在切换备用节点...")
+            except Exception as e:
+                logging.warning(f"⚠️ 节点 {quote_api} 异常: {e}")
+
+        if not quote_res or "error" in quote_res:
+            logging.error(f"❌ 所有 Jupiter 节点报价获取均失败！请检查 AWS 的 DNS 配置！")
+            return None
+
+        # 3. 获取交易体 (Serialized Transaction)
+        swap_api = self.swap_endpoints[used_index]
+        priority_fee = int(config.SOL_PRIORITY_FEE * 1e9)
+        swap_res = None
+
         try:
-            # 1. 设置买卖方向
-            if action == "buy":
-                in_mint, out_mint = self.WSOL, token_address
-                amount = int((amount_sol or config.BUY_AMOUNT_SOL) * 1e9)
-            else:
-                in_mint, out_mint = token_address, self.WSOL
-                # 卖出逻辑通常需要查询代币余额，此处简化为全仓或指定 lamports
-                amount = int(amount_sol) if amount_sol else 0
-
-                # 2. 获取 Jupiter 报价
-            slippage = slippage_bps or config.SLIPPAGE_DEFAULT
-            quote_res = requests.get(
-                f"{self.jupiter_quote_api}?inputMint={in_mint}&outputMint={out_mint}&amount={amount}&slippageBps={slippage}",
-                timeout=10
-            ).json()
-
-            if "error" in quote_res:
-                logging.error(f"❌ 报价获取失败: {quote_res['error']}")
-                return None
-
-            # 3. 获取交易体 (Serialized Transaction)
-            priority_fee = int(config.SOL_PRIORITY_FEE * 1e9)
-            swap_res = requests.post(
-                self.jupiter_swap_api,
+            resp = self.session.post(
+                swap_api,
                 json={
                     "quoteResponse": quote_res,
                     "userPublicKey": self.pubkey,
@@ -93,13 +125,19 @@ class TradeEngine:
                     "prioritizationFeeLamports": priority_fee
                 },
                 timeout=10
-            ).json()
+            )
+            resp.raise_for_status()
+            swap_res = resp.json()
+        except Exception as e:
+            logging.error(f"❌ 无法构建交易体 (节点: {swap_api}): {e}")
+            return None
 
-            if "swapTransaction" not in swap_res:
-                logging.error(f"❌ 无法构建交易体: {swap_res}")
-                return None
+        if not swap_res or "swapTransaction" not in swap_res:
+            logging.error(f"❌ 交易体解析失败: {swap_res}")
+            return None
 
-            # 4. 签名并发送
+        # 4. 签名并发送
+        try:
             raw_tx = base64.b64decode(swap_res["swapTransaction"])
             tx = VersionedTransaction.from_bytes(raw_tx)
             signature = self.keypair.sign_message(tx.message())
@@ -111,9 +149,8 @@ class TradeEngine:
 
             logging.info(f"🚀 [交易上链] {action} 成功! 签名: {tx_sig}")
             return tx_sig
-
         except Exception as e:
-            logging.error(f"❌ 交易执行崩溃: {e}")
+            logging.error(f"❌ 交易执行与签名崩溃: {e}")
             return None
 
     def start_monitor_thread(self, ca, symbol, entry_sol):
@@ -145,7 +182,8 @@ class TradeEngine:
 
     def _get_price(self, ca):
         try:
-            return float(requests.get(f"https://price.jup.ag/v4/price?ids={ca}").json()["data"][ca]["price"])
+            res = self.session.get(f"https://price.jup.ag/v4/price?ids={ca}", timeout=10).json()
+            return float(res["data"][ca]["price"])
         except:
             return 0.0
 
