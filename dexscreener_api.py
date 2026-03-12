@@ -1,5 +1,6 @@
 import requests
 import logging
+import time
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -7,36 +8,84 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 class DexScreenerAPI:
     """
     Level 1 链上雷达：DexScreener API
-    主攻：捕捉最新爆发的热门池子，且通过硬核物理规则彻底杜绝“撤LP”风险
+    升级版：增加了法证级社交资产抓取与时间溯源功能
     """
 
     def __init__(self):
         self.base_url = "https://api.dexscreener.com"
+        self.session = requests.Session()
+
+    def get_token_social_info(self, ca: str) -> dict:
+        """
+        [法证级侦察] 针对单一 CA 获取社交资产(Twitter/TG)和真实建池时间
+        用于给 Grok 提供“无盲区”的分析证据包
+        """
+        result = {
+            "has_socials": False,
+            "social_links": [],
+            "pair_age_minutes": 0,
+            "description": ""
+        }
+        try:
+            url = f"{self.base_url}/latest/dex/tokens/{ca}"
+            resp = self.session.get(url, timeout=5)
+            resp.raise_for_status()
+            data = resp.json()
+
+            pairs = data.get('pairs', [])
+            if not pairs:
+                return result
+
+            # 取流动性最大的主池子数据
+            main_pair = pairs[0]
+
+            # 提取创建时间并计算存活分钟数
+            created_at_ms = main_pair.get('pairCreatedAt', 0)
+            if created_at_ms > 0:
+                age_minutes = (time.time() * 1000 - created_at_ms) / 60000
+                result["pair_age_minutes"] = int(age_minutes)
+
+            # 提取社交链接与描述
+            info = main_pair.get('info', {})
+            socials = info.get('socials', [])
+            websites = info.get('websites', [])
+
+            links = []
+            for s in socials:
+                links.append(f"{s.get('type')}: {s.get('url')}")
+            for w in websites:
+                links.append(f"website: {w.get('url')}")
+
+            if links:
+                result["has_socials"] = True
+                result["social_links"] = links
+
+            # 描述中可能藏着马斯克推文的关键词
+            result["description"] = info.get('header', '') or info.get('description', '')
+
+            return result
+
+        except Exception as e:
+            logging.debug(f"抓取 CA {ca} 社交情报失败: {e}")
+            return result
 
     def get_latest_safe_pairs(self):
         """
         获取 DexScreener 上最新付费更新画像的代币 (防撤池子的第一道防线：Dev花钱了)
         """
         try:
-            # 1. 获取最新更新了社交信息的代币 (具有极强的主观拉盘意愿)
             url = f"{self.base_url}/token-profiles/latest/v1"
-            resp = requests.get(url, timeout=10)
+            resp = self.session.get(url, timeout=10)
             profiles = resp.json()
 
-            if not profiles:
-                return []
+            if not profiles: return []
 
-            # 2. 仅筛选 Solana 链上的合约地址
             sol_cas = [p['tokenAddress'] for p in profiles if p.get('chainId') == 'solana']
-            if not sol_cas:
-                return []
+            if not sol_cas: return []
 
-            # 限制每次查询最多 30 个，防止接口超载
             cas_str = ",".join(sol_cas[:30])
-
-            # 3. 批量查询这些代币的实时池子数据
             pair_url = f"{self.base_url}/latest/dex/tokens/{cas_str}"
-            pair_resp = requests.get(pair_url, timeout=10)
+            pair_resp = self.session.get(pair_url, timeout=10)
             pairs_data = pair_resp.json().get('pairs', [])
 
             safe_tokens = []
@@ -44,48 +93,35 @@ class DexScreenerAPI:
 
             for pair in pairs_data:
                 ca = pair['baseToken']['address']
-
-                # 去重
-                if ca in seen_cas:
-                    continue
+                if ca in seen_cas: continue
                 seen_cas.add(ca)
 
-                # ==========================================
-                # 🛡️ 绝对免疫撤池子 (Rug Pull) 的核心防御逻辑
-                # ==========================================
-
                 # 防御 1：只玩 Pump.fun 机制产出的币 (CA 必须以 pump 结尾)
-                # 这种币的 LP 要么在曲线里被锁死，要么在 Raydium 被销毁，庄家绝对无法撤池子
-                if not ca.endswith('pump'):
-                    continue
+                if not ca.endswith('pump'): continue
 
-                # 防御 2：流动性护城河 (池子太浅容易被大单砸穿，稍微放宽到 1.5w 抓更早期的)
+                # 防御 2：流动性护城河
                 liq = pair.get('liquidity', {}).get('usd', 0)
-                if liq < 15000:
-                    continue
+                if liq < 15000: continue
 
-                # 防御 3：交易活跃度 (1小时交易量必须大于 5000 美金，拒绝死水盘)
+                # 防御 3：交易活跃度
                 vol = pair.get('volume', {}).get('h1', 0)
-                if vol < 5000:
-                    continue
+                if vol < 5000: continue
 
-                # 组装适配主引擎的数据格式
                 token = {
                     "symbol": pair['baseToken']['symbol'],
                     "contractAddress": ca,
-                    "protocol": 1001,  # 标记为 Pump.fun 协议
+                    "protocol": 1001,
                     "marketCap": float(pair.get('fdv', 0)),
                     "liquidity": float(liq),
-                    "progress": 100,  # DexScreener 上的基本都已建池
+                    "progress": 100,
                     "source": "DexScreener",
                     "price": float(pair.get('priceUsd', 0)),
-                    "rank_type_tracked": 88,  # 赋予独立的高阶榜单代号: 88
-                    # 【核心修复】：显式设置持仓比例为0，防止狙击引擎将其视为100%控盘从而被永远拉黑
+                    "rank_type_tracked": 88,
                     "holdersTop10Percent": 0.0
                 }
                 safe_tokens.append(token)
 
-            logging.info(f"🦅 [DexScreener] 雷达扫描完毕！捕获 {len(safe_tokens)} 个 [高流动性 + 绝无撤池风险] 的猛犬。")
+            logging.info(f"🦅 [DexScreener] 雷达扫描完毕！捕获 {len(safe_tokens)} 个 [高流动性 + 绝无撤池风险] 的标的。")
             return safe_tokens
 
         except Exception as e:
@@ -93,5 +129,4 @@ class DexScreenerAPI:
             return []
 
 
-# 实例化单例
 dexscreener_api = DexScreenerAPI()

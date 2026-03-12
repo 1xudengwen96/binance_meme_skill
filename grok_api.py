@@ -9,8 +9,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 class GrokAPI:
     """
-    对接 xAI Grok 的接口，专职负责 Meme 币的社交潜力与病毒式传播分析
-    猎人实战版 V5：深度强化叙事套利、Ticker 审美、PvP 防身与资金效率感应
+    对接 xAI Grok 的接口，采用【法证级叙事审计】与【注意力套利】模型
+    不再做文学创作，只做基于证据链的预期差分析
     """
 
     def __init__(self):
@@ -22,103 +22,93 @@ class GrokAPI:
         }
 
     def analyze_meme_potential(self, token: dict, max_retries=2) -> dict:
-        """
-        调用 Grok 分析代币的社交热度与病毒潜质
-        返回格式: {"rating": "S/A/Neutral/F", "summary": "分析摘要"}
-        """
         if not self.api_key or self.api_key.startswith("xai-your"):
-            logging.warning("⚠️ GROK_API_KEY 未配置，跳过 AI 分析，默认返回 S 级(测试模式)")
             return {"rating": "S", "summary": "[测试模式] 默认放行"}
 
         symbol = token.get('symbol', 'Unknown')
         ca = token.get('contractAddress', 'Unknown')
-        progress = token.get('progress', 0)
 
-        # 获取由主引擎注入的上下文数据
+        # 基础数据
         mcap = token.get('marketCap', 0)
         sm_count = token.get('smart_money_count', 0)
         sm_inflow = token.get('smart_money_inflow', 0.0)
 
-        # [巅峰猎人 Prompt V5]
+        # 核心：注入由 DexScreener 抓取的法证级社交证据包
+        social_links = token.get('social_links', [])
+        has_socials = token.get('has_socials', False)
+        pair_age_minutes = token.get('pair_age_minutes', 0)
+        social_status = "社交资产已就位(有推特/TG等)" if has_socials else "暂无官方社交阵地链接"
+
+        # [法证级套利 Prompt V6]
         prompt = f"""
-        你现在是一名在全球 Web3 圈内享有盛誉的顶级 Meme 猎人（Degen Specialist）。
-        你的任务是分析 Solana/BSC 链上的原生 Meme 代币：${symbol} 
-        合约地址(CA): {ca}
-        当前进度: {progress}%
-        当前市值(MCAP): ${mcap}
-        聪明钱追踪: {sm_count} 个精英地址已潜伏，净流入 ${sm_inflow}
+        你现在是一名理性的 Web3 Degen 观察员与链上法证分析师。
+        你的任务是基于以下“铁证”，评估代币 ${symbol} 的“注意力预期差”，严禁任何文学修辞和“建议观察”等废话。
 
-        【深度分析维度】
-        1. 病毒基因（Meme Lore）：代币概念是否具备“自传播”属性？Logo/名称是否属于目前流行的“抽象文化”、“动物叙事”或“极简主义”？
-        2. Ticker 审美（Ticker Aesthetic）：代号 ${symbol} 是否简短（4字符以内最佳）、是否有力、是否容易在社交媒体（如 X）上被大量打出？
-        3. 叙事地位（Narrative Status）：判断它是叙事开创者还是劣质仿盘（Copycat）。严厉打击“第N个龙”、“第N个松鼠”这类 PvP 垃圾。
-        4. 资金/关注度错位（Attention Arbitrage）：结合 ${mcap} 市值和社交热度。如果市值极低但有聪明钱（{sm_count}人）持续买入，这是极其强烈的信号。
-        5. 真实讨论度：区分“真实 Web3 玩家讨论”与“僵尸 Bot 刷屏”。
+        【证据链清单】
+        - 代币(Ticker / CA): ${symbol} / {ca}
+        - 当前市值(MCAP): ${mcap}
+        - 存活时长: {pair_age_minutes} 分钟
+        - 社交阵地状态: {social_status} ({', '.join(social_links)})
+        - 聪明钱追踪: {sm_count} 人进场，净流入 ${sm_inflow}
 
-        【评级标准 - 猎人铁律】
-        - S级（必打金狗）：Ticker 极佳，概念新颖。⚠️【特权】：若 ${symbol} 关联 24 小时内马斯克等大佬推特或全球突发事件（政治/科技），且 Ticker 具备唯一性，无视粉丝量直接评为 S 级。
-        - A级（优质标的）：有热度，非仿盘，叙事对齐，且聪明钱 ({sm_count}人) 进场积极。
-        - Neutral级（中立/发育期）：【防误杀】纯新币且暂无大规模讨论。只要 Ticker 顺口、非劣质仿盘，必须给 Neutral，给它发育时间。
-        - F级（垃圾/割韭菜）：名字拼凑（如 PepeElonDoge）、全是僵尸号刷推、明显的短命 PvP 盘。
+        【强制分析逻辑：注意力套利模型】
+        1. 搜寻 X (Twitter) 实时热度：去核实该 CA 或 Ticker 的真实讨论量。是否是机器号在刷屏？
+        2. 时空对齐核验：如果 Ticker 是马斯克刚发的词汇（如某政治/科技事件），核对【存活时长】是否属于第一批响应的龙头。如果叙事发生了很久但它是新币，判定为碰瓷盘。
+        3. 市值/热度预期差：
+           - 巨大预期差：全网开始热议/大佬转推，但 MCAP 极低 (低于 $500k)，这是黄金位。
+           - 早期潜伏位：存活时间极短 (< 120 分钟)，社交阵地刚建立，虽然 X 上没人聊，但聪明钱在进，这属于健康发育。
+
+        【打分标准 - 必须严格执行】
+        - S级 (金狗)：叙事时机完美对齐 + 巨大预期差(热度远超市值) + 聪明钱密集入场。
+        - A级 (优质)：热度与市值同步健康上升，有真实的社交基础，非劣质仿盘。
+        - Neutral (中性/发育期)：【防误杀保护】链上资金在动(聪明钱>0或进度快)，且社交资产齐全，但 X 上暂无巨大热度。必须给 Neutral，这代表正常的早期埋伏盘。
+        - F级 (拦截)：时空碰瓷（热点早过了才发币）、全是低级 Bot 刷屏、明显的割韭菜局。
 
         【必须严格遵守的返回格式】
-        你只能返回纯 JSON，不能有任何多余的解释。
-        示例: {{"rating": "Neutral", "summary": "Ticker($ABC)简洁，概念属于XXX叙事，虽社交暂无讨论，但聪明钱已介入，建议观察。" }}
+        只返回纯 JSON。摘要中必须明确说明你的事实依据（如：热度与市值是否匹配、是否跨时空）。
+        示例: {{"rating": "Neutral", "summary": "存活仅30分钟，官推已就位。虽X上暂无广泛讨论，但市值仅3万刀且有聪明钱试水，属于正常极早期阶段，未见碰瓷痕迹。" }}
         """
 
         payload = {
             "model": config.GROK_MODEL,
             "messages": [
-                {"role": "system",
-                 "content": "You are a professional Web3 analyst. You output ONLY valid JSON. No markdown, no filler text."},
+                {"role": "system", "content": "You are a professional Web3 analyst. Output ONLY valid JSON."},
                 {"role": "user", "content": prompt}
             ],
-            "temperature": 0.4,  # 降低随机性，使判断更稳定
+            "temperature": 0.3,  # 极低温度，保证理性
             "max_tokens": 300
         }
 
         retries = 0
         while retries <= max_retries:
             try:
-                logging.info(f"🧠 [Grok] 正在进行深度 Degen 体检: {symbol} (模型: {config.GROK_MODEL})")
+                logging.info(
+                    f"🧠 [Grok] 正在执行法证级预期差计算: {symbol} (MCAP: ${mcap:,.0f} | 存活: {pair_age_minutes}分钟)")
                 response = requests.post(f"{self.base_url}/chat/completions", headers=self.headers, json=payload,
                                          timeout=20)
-
-                if response.status_code != 200:
-                    logging.warning(f"⚠️ [Grok] 请求被拒绝: HTTP {response.status_code}")
-
                 response.raise_for_status()
-                result_json = response.json()
-                content = result_json['choices'][0]['message']['content'].strip()
 
-                # 增强型 JSON 清洗逻辑
+                content = response.json()['choices'][0]['message']['content'].strip()
                 if "{" in content and "}" in content:
                     content = content[content.find("{"):content.rfind("}") + 1]
 
                 parsed_data = json.loads(content)
-
                 rating = str(parsed_data.get("rating", "Neutral")).capitalize()
+
                 if rating not in ["S", "A", "Neutral", "F"]:
                     rating = "Neutral"
 
                 return {
                     "rating": rating,
-                    "summary": parsed_data.get("summary", "无法获取 AI 分析摘要。")
+                    "summary": parsed_data.get("summary", "无法获取 AI 摘要。")
                 }
 
-            except requests.exceptions.RequestException as e:
-                logging.warning(f"⚠️ [Grok] API 网络故障: {e}")
+            except Exception as e:
+                logging.warning(f"⚠️ [Grok] 请求异常: {e}")
                 retries += 1
                 time.sleep(2)
-            except json.JSONDecodeError as e:
-                logging.error(f"❌ [Grok] 解析失败: {e} | 内容: {content[:100]}...")
-                return {"rating": "Neutral", "summary": "AI 返回格式异常，防误杀保护中。"}
-            except Exception as e:
-                logging.error(f"❌ [Grok] 未知错误: {e}")
-                return {"rating": "Neutral", "summary": f"系统异常: {str(e)}"}
 
-        return {"rating": "Neutral", "summary": "Grok 重试耗尽，默认进入中性观察池。"}
+        return {"rating": "Neutral", "summary": "AI 网络异常，基于链上数据默认放行进入观察池。"}
 
 
-# 实例化单例
 grok_api = GrokAPI()

@@ -6,17 +6,15 @@ openai>=1.3.0
 python-dotenv>=1.0.0
 #任务调度
 schedule>=1.2.0
-#API 服务器 (用于前端大盘)
+#API 服务器
 fastapi>=0.104.0
 uvicorn>=0.24.0
 pydantic>=2.4.0
-#异步支持
-asyncio>=3.4.3
-#Solana 链上交易与签名核心库 (新增)
+#Solana 链上交易与签名核心库
 solana>=0.33.0
 solders>=0.21.0
 base58>=2.1.1
-#Web 服务与作战大盘 (API 控制)
+#BSC 链上交易核心库 (新增)
+web3>=6.11.0
+#Web 服务与作战大盘
 flask>=3.0.0
-#异步/其他辅助 (如果后续有异步扩展需求可保留，目前代码暂未使用)
-httpx>=0.24.0
