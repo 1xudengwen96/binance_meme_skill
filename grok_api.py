@@ -9,8 +9,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 class GrokAPI:
     """
-    对接 xAI Grok 的接口，采用【法证级叙事审计】与【注意力套利】模型
-    不再做文学创作，只做基于证据链的预期差分析
+    对接 xAI Grok 的接口 —— 【金狗专属嗅探模式】
+    彻底修复 mcap/inflow 的强制类型转换，确保日志与逻辑 100% 不因格式化崩溃
     """
 
     def __init__(self):
@@ -28,45 +28,52 @@ class GrokAPI:
         symbol = token.get('symbol', 'Unknown')
         ca = token.get('contractAddress', 'Unknown')
 
-        # 基础数据
-        mcap = token.get('marketCap', 0)
-        sm_count = token.get('smart_money_count', 0)
-        sm_inflow = token.get('smart_money_inflow', 0.0)
+        # 【铁腕修复】：全字段强制数值化，绝不信任原始输入数据类型
+        try:
+            mcap = float(token.get('marketCap', 0))
+        except:
+            mcap = 0.0
 
-        # 核心：注入由 DexScreener 抓取的法证级社交证据包
+        try:
+            sm_count = int(token.get('smart_money_count', 0))
+        except:
+            sm_count = 0
+
+        try:
+            sm_inflow = float(token.get('smart_money_inflow', 0.0))
+        except:
+            sm_inflow = 0.0
+
+        # 获取由 DexScreener 抓取的法证级社交证据包
         social_links = token.get('social_links', [])
         has_socials = token.get('has_socials', False)
         pair_age_minutes = token.get('pair_age_minutes', 0)
-        social_status = "社交资产已就位(有推特/TG等)" if has_socials else "暂无官方社交阵地链接"
+        social_status = "✅ 社交资产已就位" if has_socials else "❌ 暂无官方社交阵地"
 
-        # [法证级套利 Prompt V6]
+        # 【金狗终极猎杀 Prompt V8】
         prompt = f"""
-        你现在是一名理性的 Web3 Degen 观察员与链上法证分析师。
-        你的任务是基于以下“铁证”，评估代币 ${symbol} 的“注意力预期差”，严禁任何文学修辞和“建议观察”等废话。
+        你现在是一名全网最顶尖的 Web3 链上猎手。你的唯一目标是：在垃圾堆中寻找“百倍金狗”。
 
-        【证据链清单】
-        - 代币(Ticker / CA): ${symbol} / {ca}
-        - 当前市值(MCAP): ${mcap}
+        【目标情报包】
+        - 代币: ${symbol} ({ca})
+        - 当前市值: ${mcap:,.0f}
         - 存活时长: {pair_age_minutes} 分钟
-        - 社交阵地状态: {social_status} ({', '.join(social_links)})
-        - 聪明钱追踪: {sm_count} 人进场，净流入 ${sm_inflow}
+        - 社交状态: {social_status} ({', '.join(social_links)})
+        - 聪明钱: {sm_count} 人进场，净流入 ${sm_inflow:,.0f}
 
-        【强制分析逻辑：注意力套利模型】
-        1. 搜寻 X (Twitter) 实时热度：去核实该 CA 或 Ticker 的真实讨论量。是否是机器号在刷屏？
-        2. 时空对齐核验：如果 Ticker 是马斯克刚发的词汇（如某政治/科技事件），核对【存活时长】是否属于第一批响应的龙头。如果叙事发生了很久但它是新币，判定为碰瓷盘。
-        3. 市值/热度预期差：
-           - 巨大预期差：全网开始热议/大佬转推，但 MCAP 极低 (低于 $500k)，这是黄金位。
-           - 早期潜伏位：存活时间极短 (< 120 分钟)，社交阵地刚建立，虽然 X 上没人聊，但聪明钱在进，这属于健康发育。
+        【金狗判定法则】
+        1. 顶级叙事：去 X (Twitter) 检索。是否关联马斯克、Vitalik 或当前最火爆概念？无热度一律判定为 F。
+        2. 聪明钱抱团：若市值 < $200k 且聪明钱 > 2 人，给出 S 级高度评价。
+        3. 时空唯一：发币时间必须与叙事爆发点高度重合，滞后蹭热度的一律给 F。
 
-        【打分标准 - 必须严格执行】
-        - S级 (金狗)：叙事时机完美对齐 + 巨大预期差(热度远超市值) + 聪明钱密集入场。
-        - A级 (优质)：热度与市值同步健康上升，有真实的社交基础，非劣质仿盘。
-        - Neutral (中性/发育期)：【防误杀保护】链上资金在动(聪明钱>0或进度快)，且社交资产齐全，但 X 上暂无巨大热度。必须给 Neutral，这代表正常的早期埋伏盘。
-        - F级 (拦截)：时空碰瓷（热点早过了才发币）、全是低级 Bot 刷屏、明显的割韭菜局。
+        【打分标准】
+        - S级 (超级金狗)：顶级叙事 + 极早期 + 聪明钱抱团抢筹。
+        - A级 (优质强庄)：叙事真实，社交活跃，资金稳步流入。
+        - Neutral (平庸土狗)：平庸就是罪！没爆发力的通通给 Neutral。
+        - F级 (拦截)：垃圾盘、碰瓷盘、收割局。
 
-        【必须严格遵守的返回格式】
-        只返回纯 JSON。摘要中必须明确说明你的事实依据（如：热度与市值是否匹配、是否跨时空）。
-        示例: {{"rating": "Neutral", "summary": "存活仅30分钟，官推已就位。虽X上暂无广泛讨论，但市值仅3万刀且有聪明钱试水，属于正常极早期阶段，未见碰瓷痕迹。" }}
+        【必须返回纯 JSON】
+        {{ "rating": "评级", "summary": "依据事实的极简摘要" }}
         """
 
         payload = {
@@ -75,15 +82,16 @@ class GrokAPI:
                 {"role": "system", "content": "You are a professional Web3 analyst. Output ONLY valid JSON."},
                 {"role": "user", "content": prompt}
             ],
-            "temperature": 0.3,  # 极低温度，保证理性
+            "temperature": 0.2,
             "max_tokens": 300
         }
 
         retries = 0
         while retries <= max_retries:
             try:
-                logging.info(
-                    f"🧠 [Grok] 正在执行法证级预期差计算: {symbol} (MCAP: ${mcap:,.0f} | 存活: {pair_age_minutes}分钟)")
+                # 这里的格式化已通过上面的 float 转换获得 100% 保障
+                logging.info(f"🧠 [Grok 金狗审计] {symbol} | 市值: ${mcap:,.0f} | 聪明钱: {sm_count}人")
+
                 response = requests.post(f"{self.base_url}/chat/completions", headers=self.headers, json=payload,
                                          timeout=20)
                 response.raise_for_status()
@@ -104,11 +112,11 @@ class GrokAPI:
                 }
 
             except Exception as e:
-                logging.warning(f"⚠️ [Grok] 请求异常: {e}")
+                logging.warning(f"⚠️ [Grok] 请求异常 (重试 {retries + 1}): {e}")
                 retries += 1
                 time.sleep(2)
 
-        return {"rating": "Neutral", "summary": "AI 网络异常，基于链上数据默认放行进入观察池。"}
+        return {"rating": "Neutral", "summary": "AI 网络异常，默认不买入。"}
 
 
 grok_api = GrokAPI()

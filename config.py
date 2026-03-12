@@ -1,62 +1,18 @@
 import os
-import requests
 from dotenv import load_dotenv
 
 # 加载当前目录下的 .env 文件
 load_dotenv()
 
 
-def auto_detect_proxy():
-    """
-    智能网络嗅探器：解决本地开发与海外服务器部署来回改代理的痛点
-    """
-    env_proxy = os.getenv("PROXY_URL", "").strip()
-    if env_proxy:
-        print(f"🌐 [网络嗅探] 使用 .env 强制指定的代理: {env_proxy}")
-        return env_proxy
-
-    print("🌐 [网络嗅探] 正在检测 Jupiter API 连通性...")
-    # 1. 尝试直连 (模拟海外服务器或全局 TUN 模式)
-    try:
-        # 只要能连上就行，哪怕报 400 Bad Request 也说明网络是通的
-        requests.get("https://quote-api.jup.ag", timeout=2)
-        print("✅ [网络嗅探] API 直连通畅！当前为海外环境或全局 TUN 模式，免代理。")
-        return ""
-    except requests.RequestException:
-        print("⚠️ [网络嗅探] 直连失败 (可能遇墙/DNS污染)，正在自动扫描本地常用代理端口...")
-
-    # 2. 扫描本地常用代理客户端端口 (已将你的专属端口置于最高优先级)
-    common_proxies = [
-        "http://127.0.0.1:8800",  # 👑 你的专属 HTTP 代理
-        "socks5://127.0.0.1:10020",  # 👑 你的专属 SOCKS5 代理
-        "http://127.0.0.1:7890",  # Clash 默认
-        "http://127.0.0.1:10809",  # v2rayN 默认
-        "http://127.0.0.1:10808",  # Xray 默认
-        "http://127.0.0.1:1080",  # Shadowsocks 默认
-        "http://127.0.0.1:1081",
-        "http://127.0.0.1:9090",
-    ]
-
-    for p in common_proxies:
-        try:
-            proxies = {"http": p, "https": p}
-            requests.get("https://quote-api.jup.ag", proxies=proxies, timeout=1.5)
-            print(f"✅ [网络嗅探] 成功命中本地代理池，自动挂载: {p}")
-            return p
-        except requests.RequestException:
-            continue
-
-    print("❌ [网络嗅探] 所有常用代理端口均未响应，后续 Solana 交易可能大概率超时！")
-    return ""
-
-
 class Config:
     """
-    统一管理项目的环境变量与配置参数 - 猎人进化版 (双链实战升级)
+    统一管理项目的环境变量与配置参数 - 猎人进化版 (纯净实战版)
     """
-    # ---------------- 智能网络 ----------------
-    # 自动获取最佳网络通道
-    PROXY_URL = auto_detect_proxy()
+    # ---------------- 代理配置 ----------------
+    # 本地开发时写: http://127.0.0.1:8800
+    # AWS 服务器上: 留空即可 (代码内自带备用节点穿墙)
+    PROXY_URL = os.getenv("PROXY_URL", "").strip()
 
     # ---------------- Grok (xAI) 配置 ----------------
     GROK_API_KEY = os.getenv("GROK_API_KEY")
@@ -73,7 +29,7 @@ class Config:
 
     # ---------------- 引擎运行配置 ----------------
     SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL_SECONDS", 3))
-    TARGET_CHAIN_ID = os.getenv("TARGET_CHAIN_ID", "CT_501,56")  # CT_501=Solana, 56=BSC
+    TARGET_CHAIN_ID = os.getenv("TARGET_CHAIN_ID", "CT_501,56")
 
     # ---------------- 猎人筛选阈值 (实战放宽) ----------------
     MAX_TOP10_HOLDING = float(os.getenv("MAX_TOP10_HOLDING", 75.0))
@@ -85,6 +41,14 @@ class Config:
     BUY_AMOUNT_SOL = float(os.getenv("BUY_AMOUNT_SOL", 0.1))
     SOL_RPC_URL = os.getenv("SOL_RPC_URL", "https://api.mainnet-beta.solana.com")
     SOL_PRIORITY_FEE = float(os.getenv("SOL_PRIORITY_FEE", 0.005))
+
+    # ---------------- 交易备用网关 (穿墙核心) ----------------
+    # 当美国 IP (如 AWS) 被 Jupiter 官方拉黑/DNS污染时，自动无缝切换到备用企业节点强行下单！
+    JUPITER_ENDPOINTS = [
+        "https://quote-api.jup.ag/v6",  # 官方主节点 (AWS美国IP会报 getaddrinfo failed)
+        "https://jupiter-swap-api.quiknode.pro/v6",  # QuickNode 企业级备用节点 (防封杀，穿墙专用)
+        "https://api.jup.ag/swap/v1"  # 官方历史备用节点
+    ]
 
     # ---------------- 自动交易与竞争配置 (BSC - 新增) ----------------
     BSC_PRIVATE_KEY = os.getenv("BSC_PRIVATE_KEY")
