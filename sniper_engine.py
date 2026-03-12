@@ -211,7 +211,8 @@ class SniperEngine:
                     elif final_score >= 75:
                         # Neutral 补偿后过 75 线的，降低开仓金额试错
                         buy_multiplier = 0.5 if rating == "Neutral" else 0.8
-                        token['override_buy_amount'] = config.BUY_AMOUNT_SOL * buy_multiplier
+                        token['override_buy_amount'] = (
+                                                           config.BUY_AMOUNT_SOL if self.chain_id == "CT_501" else config.BUY_AMOUNT_BNB) * buy_multiplier
                         self._execute_trade_and_notify(token, rating, final_score, summary, score_details,
                                                        config.SLIPPAGE_A_GRADE)
                     else:
@@ -228,7 +229,13 @@ class SniperEngine:
     def _execute_trade_and_notify(self, token, grade, score, summary, details, slippage_bps):
         symbol = token.get("symbol")
         ca = token.get("contractAddress")
-        buy_amount = token.get('override_buy_amount', config.BUY_AMOUNT_SOL)
+
+        # 核心修复：根据当前链选择金额
+        if self.chain_id == "CT_501":
+            buy_amount = token.get('override_buy_amount', config.BUY_AMOUNT_SOL)
+        else:
+            buy_amount = token.get('override_buy_amount', config.BUY_AMOUNT_BNB)
+
         progress = self._safe_float(token.get("progress"))
         mcap = self._safe_float(token.get("marketCap"))
 
@@ -245,11 +252,19 @@ class SniperEngine:
             grok_analysis = {"rating": grade, "summary": summary}
             feishu_bot.format_and_send_alert(token, grok_analysis)
 
-        tx_sig = trade_engine.execute_swap(ca, "buy", amount_sol=buy_amount, slippage_bps=slippage_bps)
+        # 核心修复：调用参数补全了 chain_id，确保传入底层引擎不崩溃
+        tx_sig = trade_engine.execute_swap(
+            token_address=ca,
+            action="buy",
+            chain_id=self.chain_id,
+            amount=buy_amount,
+            slippage_bps=slippage_bps
+        )
 
         if tx_sig and not tx_sig.startswith("sim_tx"):
             self.stats["success_sniped"] += 1
-            trade_engine.start_monitor_thread(ca, symbol, buy_amount)
+            # 监控同样需要 chain_id
+            trade_engine.start_monitor_thread(ca, symbol, buy_amount, self.chain_id)
 
     def run_scan_cycle(self):
         if not getattr(self, 'is_active', True): return
